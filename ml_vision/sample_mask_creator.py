@@ -7,7 +7,7 @@ width, height = 500, 500
 canvas = np.zeros((height, width, 3), dtype="uint8")
 
 # --- 1. Randomize square size by ±10% ---
-scale_x = random.uniform(0.9, 1.1)
+scale_x = random.uniform(0.5, 1.4)
 scale_y = random.uniform(0.9, 1.1)
 
 rect_w = int(300 * scale_x)   # Original 400-100 = 300
@@ -71,7 +71,4 @@ rotated = cv2.warpAffine(canvas, M, (new_w, new_h), borderValue=(0, 0, 0))
 
 print(f"Square size: {rect_w}x{rect_h}")
 # --- 5. Display and save ---
-cv2.imshow("Rounded Square with Star", rotated)
-cv2.imwrite("star.png", rotated)
-cv2.waitKey(0)
-cv2.destroyAllWindows()
+cv2.imwrite("ml_vision/testdata/mask.png", rotated)
