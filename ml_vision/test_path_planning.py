@@ -3,7 +3,6 @@ import cv2
 import heapq
 import matplotlib.pyplot as plt
 from matplotlib.patches import Rectangle
-from collections import deque
 
 # =====================
 # PARAMETERS
@@ -80,98 +79,59 @@ def spiral_order_indices(h, w):
 # =====================
 # A* IMPLEMENTATION
 # =====================
-def spiral_visit_all_clusters(grid, spiral_grid, start=(0,0)):
+def astar_clusters(grid, spiral_grid, start=(0,0)):
     """
-    Plan a path that visits all free clusters:
-    - Follows an outside-in spiral
-    - Never crosses obstacles
-    - Favors long straight paths
-    - Minimizes revisiting clusters
+    A* search over clusters using spiral heuristic.
+    Heuristic now directly follows spiral order, preventing back-and-forth on horizontals.
+    Each cluster = single point, already visited clusters are never revisited.
     """
     h, w = grid.shape
     visited = set()
-    path_clusters = []
+    path_pixels = []
 
-    # Directions: up, right, down, left (clockwise)
-    directions = [(-1,0),(0,1),(1,0),(0,-1)]
-
-    # Current cluster and movement direction
-    current = start
-    prev_dir = None
-
-    # Precompute spiral order
+    # Precompute spiral order list of cluster coordinates
     spiral_coords = sorted([(i,j) for i in range(h) for j in range(w) if grid[i,j]==1],
                            key=lambda x: spiral_grid[x])
+    spiral_idx = 0  # index of the next target in spiral_coords
 
-    # BFS-based movement toward nearest unvisited cluster along spiral order
-    while len(visited) < len(spiral_coords):
-        # Visit current cluster if not already visited
+    current = start
+    while spiral_idx < len(spiral_coords):
+        # If current cluster is free and not visited, add to path
         if current not in visited and grid[current]:
-            path_clusters.append(current)
+            ci, cj = current
+            center_y = ci*cluster_size + cluster_size//2
+            center_x = cj*cluster_size + cluster_size//2
+            path_pixels.append((center_y, center_x))
             visited.add(current)
 
-        # Find nearest unvisited cluster in spiral order
-        unvisited = [c for c in spiral_coords if c not in visited]
-        if not unvisited:
+        # Determine next target along spiral
+        while spiral_idx < len(spiral_coords) and spiral_coords[spiral_idx] in visited:
+            spiral_idx += 1
+        if spiral_idx >= len(spiral_coords):
             break
-        target = unvisited[0]  # always take next spiral cluster
+        target = spiral_coords[spiral_idx]
 
-        # Determine candidate neighbors (4-connectivity)
+        # Simple A* step to move 1 cluster toward target (4-connected)
         ci, cj = current
-        candidates = []
-        for di,dj in directions:
-            ni, nj = ci+di, cj+dj
-            if 0 <= ni < h and 0 <= nj < w and grid[ni,nj]==1:
-                candidates.append((ni,nj,(di,dj)))
-
-        if not candidates:
-            # No free neighbors: jump to target via BFS
-            path_to_target = bfs_to_target(grid, current, target)
-            for c in path_to_target[1:]:  # skip current since already added
-                if c not in visited:
-                    path_clusters.append(c)
-                    visited.add(c)
-            current = target
-            prev_dir = None
-        else:
-            # Choose neighbor that minimizes manhattan distance to target
-            best_neighbor = min(candidates, key=lambda x: abs(x[0]-target[0])+abs(x[1]-target[1]))
-            neighbor_coord, move_dir = best_neighbor[:2], best_neighbor[2]
-            current = neighbor_coord
-            prev_dir = move_dir
-
-    return path_clusters
-
-# ---------------------------
-# Simple BFS to reach target if blocked
-# ---------------------------
-def bfs_to_target(grid, start, target):
-    """
-    BFS to find a valid path between two clusters without crossing obstacles.
-    Returns list of clusters from start to target.
-    """
-    from collections import deque
-    h, w = grid.shape
-    queue = deque()
-    queue.append((start, [start]))
-    visited = set()
-    visited.add(start)
-
-    while queue:
-        current, path = queue.popleft()
-        if current == target:
-            return path
-        ci, cj = current
+        ti, tj = target
+        neighbors = []
         for di,dj in [(-1,0),(1,0),(0,-1),(0,1)]:
             ni, nj = ci+di, cj+dj
             if 0 <= ni < h and 0 <= nj < w and grid[ni,nj]==1 and (ni,nj) not in visited:
-                visited.add((ni,nj))
-                queue.append(((ni,nj), path+[ (ni,nj) ]))
-    return [start]  # fallback if target unreachable
+                neighbors.append((ni,nj))
+        if not neighbors:
+            # No available neighbors, jump directly to target (isolated clusters)
+            current = target
+        else:
+            # Choose neighbor closest to target (manhattan distance)
+            current = min(neighbors, key=lambda x: abs(x[0]-ti)+abs(x[1]-tj))
+
+    return path_pixels
+
 
 
 spiral_grid = spiral_order_indices(clusters_h, clusters_w)
-path_pixels = np.asarray(spiral_visit_all_clusters(cluster_grid, spiral_grid, start=(15,23)))
+path_pixels = np.asarray(astar_clusters(cluster_grid, spiral_grid, start=(15,23)))
 # =====================
 # MAP PIXELS TO XYZ
 # =====================
