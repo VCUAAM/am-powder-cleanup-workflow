@@ -32,13 +32,23 @@ def align_object_npz(npz_path, mask_path):
     mask_rot  = warp(mask, interp=cv2.INTER_NEAREST)
     xyz_rot   = np.dstack([warp(xyz[...,c]) for c in range(3)])
 
+    mask_rows = ~np.all(mask_rot == 0, axis=1)  # keep rows with any nonzero
+    mask_cols = ~np.all(mask_rot == 0, axis=0)  # keep cols with any nonzero
+
+    # Save which indices are being removed
+    removed_rows = np.where(~mask_rows)[0]
+    removed_cols = np.where(~mask_cols)[0]
+
+    mask_rot = mask_rot[np.ix_(mask_rows, mask_cols)]
+    rgb_rot = rgb_rot[np.ix_(mask_rows, mask_cols)]
+    xyz_rot = xyz_rot[np.ix_(mask_rows, mask_cols)]
     rotated_data = {
         "color": rgb_rot,
         "xyz": xyz_rot,
         "mask": mask_rot,
         "M": M
     }
-    aligned_npz_path = npz_path.replace(".npz", "_aligned.npz")
+    aligned_npz_path = "path_planning/scripts/testdata/rgb_xyz_capture_aligned.npz"
     np.savez_compressed(aligned_npz_path,
                             color=rgb_rot,
                             xyz=xyz_rot,
@@ -50,7 +60,7 @@ def main():
     npz_path = save_path + "/rgb_xyz_capture.npz"
     mask_path = save_path + "/mask.png"
     data = align_object_npz(npz_path,mask_path)
-    print(data["xyz"])
+    #print(data["xyz"])
     cv2.imwrite(save_path + "/aligned_mask.png", data["mask"])
     cv2.imwrite(save_path + "/aligned_color.png", data["color"])
 
