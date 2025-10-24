@@ -49,10 +49,7 @@ def align_object_npz(npz_path, mask_path):
         "M": M
     }
     aligned_npz_path = "path_planning/scripts/testdata/rgb_xyz_capture_aligned.npz"
-    np.savez_compressed(aligned_npz_path,
-                            color=rgb_rot,
-                            xyz=xyz_rot,
-                            mask=mask_rot)
+    #np.savez_compressed(aligned_npz_path,color=rgb_rot,xyz=xyz_rot,mask=mask_rot)
     return rotated_data
 
 def main():
@@ -60,9 +57,9 @@ def main():
     npz_path = save_path + "/rgb_xyz_capture.npz"
     mask_path = save_path + "/mask.png"
     data = align_object_npz(npz_path,mask_path)
-    #print(data["xyz"])
-    cv2.imwrite(save_path + "/aligned_mask.png", data["mask"])
-    cv2.imwrite(save_path + "/aligned_color.png", data["color"])
+    print(data["mask"].dtype)
+    #cv2.imwrite(save_path + "/aligned_mask.png", data["mask"])
+    #cv2.imwrite(save_path + "/aligned_color.png", data["color"])
 
 if __name__ == "__main__":
     main()
