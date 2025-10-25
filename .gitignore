@@ -1,4 +1,5 @@
-yolov5/
+ml_vision/yolov5/
 pathplanning/scripts/__pycache__/
 am_vision/test/
 vscode/
+ml_vision/training/
