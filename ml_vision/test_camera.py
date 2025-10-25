@@ -8,8 +8,11 @@ def camera_capture(save_path):
     config = rs.config()
     config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
     config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
-    pipeline.start(config)
-
+    profile = pipeline.start(config)
+    color_sensor = profile.get_device().query_sensors()[1]
+    color_sensor.set_option(rs.option.enable_auto_exposure, True)
+    color_sensor.set_option(rs.option.enable_auto_white_balance, False)
+    color_sensor.set_option(rs.option.white_balance,3000)
     # 2. Create alignment and pointcloud objects
     align = rs.align(rs.stream.color)
     pc = rs.pointcloud()
@@ -39,7 +42,6 @@ def camera_capture(save_path):
         # Reshape XYZ to image shape
         h, w = color_image.shape[:2]
         xyz_image = vtx.reshape(h, w, 3)
-        print(xyz_image)
         # 5. Save RGB + XYZ to a compressed .npz
         np.savez_compressed(save_path + "rgb_xyz_capture.npz",
                             color=color_image,
