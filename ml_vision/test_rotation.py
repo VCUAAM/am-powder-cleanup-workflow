@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 
-def align_object_npz(npz_path, mask_path):
+def align_object_npz(npz_path,mask_path,save_path,offset_px):
 
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
     # Load data from npz
@@ -35,31 +35,33 @@ def align_object_npz(npz_path, mask_path):
     mask_rows = ~np.all(mask_rot == 0, axis=1)  # keep rows with any nonzero
     mask_cols = ~np.all(mask_rot == 0, axis=0)  # keep cols with any nonzero
 
-    # Save which indices are being removed
-    removed_rows = np.where(~mask_rows)[0]
-    removed_cols = np.where(~mask_cols)[0]
-
     mask_rot = mask_rot[np.ix_(mask_rows, mask_cols)]
     rgb_rot = rgb_rot[np.ix_(mask_rows, mask_cols)]
     xyz_rot = xyz_rot[np.ix_(mask_rows, mask_cols)]
+
+    h,w = mask_rot.shape
+
+    offset_mask = mask_rot[offset_px:h - offset_px, offset_px:w - offset_px]
+    offset_rgb = rgb_rot[offset_px:h - offset_px, offset_px:w - offset_px]
+    offset_xyz = xyz_rot[offset_px:h - offset_px, offset_px:w - offset_px]
+
     rotated_data = {
-        "color": rgb_rot,
-        "xyz": xyz_rot,
-        "mask": mask_rot,
-        "M": M
+        "color": offset_xyz,
+        "xyz": offset_rgb,
+        "mask": offset_mask
     }
-    aligned_npz_path = "path_planning/scripts/testdata/rgb_xyz_capture_aligned.npz"
-    #np.savez_compressed(aligned_npz_path,color=rgb_rot,xyz=xyz_rot,mask=mask_rot)
+    np.savez_compressed(save_path,color=offset_rgb,xyz=offset_xyz,mask=offset_mask)
+
     return rotated_data
 
 def main():
     save_path = "ml_vision/testdata"
     npz_path = save_path + "/rgb_xyz_capture.npz"
     mask_path = save_path + "/mask.png"
-    data = align_object_npz(npz_path,mask_path)
-    print(data["mask"].dtype)
-    #cv2.imwrite(save_path + "/aligned_mask.png", data["mask"])
-    #cv2.imwrite(save_path + "/aligned_color.png", data["color"])
+    aligned_npz_path = "ml_vision/testdata/rgb_xyz_capture_aligned.npz"
+    offset_px = 10
+    data = align_object_npz(npz_path,mask_path,aligned_npz_path,offset_px)
+    cv2.imwrite(save_path + "/aligned_mask.png", data["mask"])
 
 if __name__ == "__main__":
     main()
