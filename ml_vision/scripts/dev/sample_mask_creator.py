@@ -7,7 +7,7 @@ width, height = 500, 500
 canvas = np.zeros((height, width, 3), dtype="uint8")
 
 # --- 1. Randomize square size by ±10% ---
-scale_x = random.uniform(0.5, 1.4)
+scale_x = random.uniform(0.9, 1.1)
 scale_y = random.uniform(0.9, 1.1)
 
 rect_w = int(300 * scale_x)   # Original 400-100 = 300
@@ -40,8 +40,8 @@ cv2.circle(mask, (x2 - radius, y2 - radius), radius, 255, -1)
 canvas[mask == 255] = (255, 255, 255)
 
 # --- 3. Draw the black star polygon ---
-outer_radius = 60
-inner_radius = 30
+outer_radius = 50
+inner_radius = 20
 points = []
 
 for i in range(10):
@@ -71,4 +71,4 @@ rotated = cv2.warpAffine(canvas, M, (new_w, new_h), borderValue=(0, 0, 0))
 
 print(f"Square size: {rect_w}x{rect_h}")
 # --- 5. Display and save ---
-cv2.imwrite("ml_vision/testdata/mask.png", rotated)
+cv2.imwrite("ml_vision/test/test_mask.png", rotated)

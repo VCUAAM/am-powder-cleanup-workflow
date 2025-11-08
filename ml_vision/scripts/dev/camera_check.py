@@ -19,7 +19,8 @@ def camera_capture():
         config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
         profile = pipeline.start(config)
         color_sensor = profile.get_device().query_sensors()[1]
-        color_sensor.set_option(rs.option.enable_auto_exposure, True)
+        color_sensor.set_option(rs.option.enable_auto_exposure, False)
+        color_sensor.set_option(rs.option.exposure,250)
         color_sensor.set_option(rs.option.enable_auto_white_balance, False)
         color_sensor.set_option(rs.option.white_balance,3000)
         # 2. Create alignment and pointcloud objects
@@ -65,7 +66,7 @@ def camera_capture():
             
 
 def main():
-    save_path = "/home/rosnuc/GitHub/vcu_am_post_processing/ml_vision/"
+    save_path = "ml_vision/test/"
     shape = 'test'
 
     color_image,xyz_image = camera_capture()

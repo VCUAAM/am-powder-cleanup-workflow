@@ -4,6 +4,7 @@ import numpy as np
 def align_object_npz(npz_path,mask_path,save_path,offset_px):
 
     mask = cv2.imread(mask_path, cv2.IMREAD_GRAYSCALE)
+
     # Load data from npz
     data = np.load(npz_path)
     rgb = data["color"]
@@ -15,11 +16,11 @@ def align_object_npz(npz_path,mask_path,save_path,offset_px):
     mean, eigvecs = cv2.PCACompute(coords, mean=np.array([]))
     center = tuple(mean[0])
     angle = np.degrees(np.arctan2(eigvecs[0,1], eigvecs[0,0]))
-
+    
     # Snap to closest right angle 
     if abs(angle) > 45:
         angle += -abs(angle)/angle*90
-
+    print(angle)
     # --- build rotation matrix about the object centroid ---
     M = cv2.getRotationMatrix2D(center, angle, 1.0)
 
@@ -55,10 +56,10 @@ def align_object_npz(npz_path,mask_path,save_path,offset_px):
     return rotated_data
 
 def main():
-    save_path = "ml_vision/testdata"
+    save_path = "ml_vision/test"
     npz_path = save_path + "/rgb_xyz_capture.npz"
-    mask_path = save_path + "/mask.png"
-    aligned_npz_path = "ml_vision/testdata/rgb_xyz_capture_aligned.npz"
+    mask_path = save_path + "/bounded_mask.png"
+    aligned_npz_path = "ml_vision/test/rgb_xyz_capture_aligned.npz"
     offset_px = 10
     data = align_object_npz(npz_path,mask_path,aligned_npz_path,offset_px)
     cv2.imwrite(save_path + "/aligned_mask.png", data["mask"])

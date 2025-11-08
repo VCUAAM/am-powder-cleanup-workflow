@@ -1,17 +1,22 @@
 import numpy as np
 import cv2
+import matplotlib
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon as MplPolygon
+
+matplotlib.use('TkAgg')
 
 # Visualizer for the path
 def visualizer(path,polygon):
     fig,ax = plt.subplots()
-    polygon = np.squeeze(polygon)
-    smooth_poly = cv2.approxPolyDP(polygon, 2.5, True).reshape(-1, 2)
+    if polygon:
+        polygon = np.squeeze(polygon)
+        smooth_poly = cv2.approxPolyDP(polygon, 2.5, True).reshape(-1, 2)
+        patch = MplPolygon(smooth_poly, closed=True, facecolor='black', edgecolor='black')
+        ax.add_patch(patch)
+    ax.set_aspect('equal', adjustable='box')
     plt.plot(path[:,0],path[:,1],)
-    patch = MplPolygon(smooth_poly, closed=True, facecolor='black', edgecolor='black')
-    ax.add_patch(patch)
-    plt.savefig('C:/Users/schorrl/Documents/GitHub/vcu_am_post_processing/path_planning/scripts/testdata/path_overlay.png')
+    plt.savefig('path_planning/test/path_overlay.png')
 
 def offset_polygon(polygon, offset_distance, smooth=True, epsilon_ratio=0.01):
     """
@@ -120,12 +125,15 @@ def compute_grid(mask, cluster_size=10):
 
     inverted = cv2.bitwise_not(mask)
     mask_contour, _ = cv2.findContours(inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    largest_contour = max(mask_contour, key=cv2.contourArea)
-
-    # Bounding rectangle for termination check
-    x, y, w, h = cv2.boundingRect(largest_contour)
     bounded = mask.copy()
-    bounded[y:y+h, x:x+w] = 0
+    if mask_contour:
+        largest_contour = max(mask_contour, key=cv2.contourArea)
+
+        # Bounding rectangle for termination check
+        x, y, w, h = cv2.boundingRect(largest_contour)
+        bounded[y:y+h, x:x+w] = 0
+    else:
+        largest_contour = None
 
     # Convert to cluster grid (same as your current logic)
     cluster_grid = np.zeros((clusters_h, clusters_w), dtype=np.uint8)
@@ -296,14 +304,15 @@ def compute_path(mask, cluster_size,visualize = False):
         center_x = center_x - 1 if center_x == w_m else center_x
         path_px.append((center_y, center_x))
     
-    # Generate concentric offset polygons
-    offset_polygons = generate_offset_polygons(polygon, cluster_size)
+    if polygon:
+        # Generate concentric offset polygons
+        offset_polygons = generate_offset_polygons(polygon, cluster_size)
 
-    for layer in offset_polygons:
-        poly = reorder_polygon_start(layer,path_px[-1])
-        for [i,j] in poly:
-            path_px.append((i,j))
-            path.append((i/cluster_size,j/cluster_size))
+        for layer in offset_polygons:
+            poly = reorder_polygon_start(layer,path_px[-1])
+            for [i,j] in poly:
+                path_px.append((i,j))
+                path.append((i/cluster_size,j/cluster_size))
 
     if visualize:
         visualizer(np.asarray(path_px),polygon)
@@ -312,8 +321,8 @@ def compute_path(mask, cluster_size,visualize = False):
 
 def main():
     # Parameters
-    save_path = "path_planning/scripts/testdata"
-    npz_file = save_path + "/rgb_xyz_capture_aligned.npz"
+    save_path = "path_planning/test"
+    npz_file = 'ml_vision/test' + "/rgb_xyz_aligned.npz"
     output_file = save_path + "/robot_path.npz"
     cluster_size = 10 # pixels
 
