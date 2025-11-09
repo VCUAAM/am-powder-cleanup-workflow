@@ -1,9 +1,8 @@
 import pyrealsense2 as rs
 import numpy as np
 import cv2
-    
-def save_capture(color_image,xyz_image,save_path,shape):
 
+def save_capture(color_image,xyz_image,save_path,shape):
     # 5. Save RGB + XYZ to a compressed .npz
     cv2.imwrite(save_path + shape + '.png',color_image)
     print('Saved:' + shape + '.png')
@@ -20,7 +19,9 @@ def camera_capture():
         profile = pipeline.start(config)
         color_sensor = profile.get_device().query_sensors()[1]
         color_sensor.set_option(rs.option.enable_auto_exposure, False)
-        color_sensor.set_option(rs.option.exposure,250)
+        color_sensor.set_option(rs.option.exposure,exposure)
+        print(f'Exposure level: {color_sensor.get_option(rs.option.exposure)}')
+        print(f'Desired exposure level: {exposure}')
         color_sensor.set_option(rs.option.enable_auto_white_balance, False)
         color_sensor.set_option(rs.option.white_balance,3000)
         # 2. Create alignment and pointcloud objects
@@ -64,9 +65,10 @@ def camera_capture():
         finally:
             pipeline.stop()
             
+exposure = 250
 
 def main():
-    save_path = "ml_vision/test/"
+    save_path = "ml_vision/data/debugging/"
     shape = 'test'
 
     color_image,xyz_image = camera_capture()

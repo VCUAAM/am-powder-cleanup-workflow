@@ -122,7 +122,7 @@ class PathPlanner:
             self.obstacle = max(mask_contour, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(self.obstacle)
             bounded[y:y + h, x:x + w] = 0
-
+        
         grid = np.zeros((clusters_h, clusters_w), dtype=np.uint8)
         for i in range(clusters_h):
             for j in range(clusters_w):
@@ -132,6 +132,13 @@ class PathPlanner:
                     grid[i, j] = 1
         
         return grid
+
+    def compute_average_height(self):
+        z = self.xyz[:,:,2]
+        mean = np.mean(z)
+        std = np.std(z)
+
+        print(f'Mean: {mean}\nStandard Deviation: {std}')
 
     # --------- WRAPPING RASTER SCAN ----------
     def path_planner(self, h, w, boundaries):
@@ -252,7 +259,7 @@ class PathPlanner:
                 for [i, j] in poly:
                     path_px.append((i, j))
                     path.append((i / self.cluster_size, j / self.cluster_size))
-
+        
         self.visualizer(np.asarray(path_px))
         robot_path = [self.xyz[i, j] for (i, j) in path_px]
 
