@@ -4,8 +4,8 @@ import pathlib
 import platform
 import cv2
 import pyrealsense2 as rs
-from scipy.ndimage import rotate
-
+import time
+from scipy.ndimage import distance_transform_edt
 class RealSenseCamera:
     def __init__(self,save_path = None):
         if not save_path:
@@ -19,82 +19,201 @@ class RealSenseCamera:
         self.exposure = None
         self.auto_wb = True
         self.wb = None
+        self.set_emitter = True
+        self.h = 480
+        self.w = 848
 
-    def start_stream(self):
+        # Depth processing parameters
+        self.max_distance = 2 #m
+
+        # Decimate filter
+        self.decimate = rs.decimation_filter()
+        self.decimate.set_option(rs.option.filter_magnitude, 2)
+        
+        # Threshold filter
+        self.threshold = rs.threshold_filter()
+        self.threshold.set_option(rs.option.max_distance, self.max_distance)
+
+        # Disparity domain
+        self.depth_to_disparity = rs.disparity_transform(True)
+        
+        # Spatial filter
+        self.spatial = rs.spatial_filter()
+        self.spatial.set_option(rs.option.filter_magnitude, 2)
+        self.spatial.set_option(rs.option.filter_smooth_alpha, .5)
+        self.spatial.set_option(rs.option.filter_smooth_delta, 20)
+        self.spatial.set_option(rs.option.holes_fill, 2)
+        
+        # Temporal Filter
+        self.temporal = rs.temporal_filter()
+        self.temporal_length = 15 #frames
+
+        # Depth domain
+        self.disparity_to_depth = rs.disparity_transform(False)
+        
+        # Hole filling filter
+        self.hole_filling = rs.hole_filling_filter(1)
+
         # Build pipeline and config
         self.pipeline = rs.pipeline()
         config = rs.config()
-        config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
-        config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+
+        # Configuring image streams
+        config.enable_stream(rs.stream.depth, self.w, self.h, rs.format.z16, 60)
+        config.enable_stream(rs.stream.color, self.w, self.h, rs.format.bgr8, 60)
 
         # Start pipeline
         profile = self.pipeline.start(config)
 
         # Configure camera exposure + white balance
-        color_sensor = profile.get_device().query_sensors()[1]
-        color_sensor.set_option(rs.option.enable_auto_exposure, self.auto_exposure)
-
-        if not self.auto_exposure and self.exposure:
-            color_sensor.set_option(rs.option.exposure, self.exposure)
+        self.depth_sensor,self.color_sensor,_ = profile.get_device().query_sensors()
         
-        color_sensor.set_option(rs.option.enable_auto_white_balance, self.auto_wb)
-
-        if self.debugging and color_sensor.get_option(rs.option.exposure) != self.exposure:
-            print(f'Exposure level: {color_sensor.get_option(rs.option.exposure)}')
-            print(f'Desired exposure level: {self.exposure}')
-
-        if not self.auto_wb and self.wb:
-            color_sensor.set_option(rs.option.white_balance, self.wb)
-
         # Alignment + pointcloud objects moved into class
         self.align = rs.align(rs.stream.color)
         self.pc = rs.pointcloud()
 
-    def capture(self):
-        try:
-            self.start_stream()
-            # Let auto-exposure settle (unchanged)
-            for _ in range(5):
-                _ = self.pipeline.wait_for_frames()
+    def configure_image(self):
+        self.depth_sensor.set_option(rs.option.emitter_enabled, self.set_emitter)
+        self.color_sensor.set_option(rs.option.enable_auto_exposure, self.auto_exposure)
+        
+        if not self.auto_exposure and self.exposure:
+            self.color_sensor.set_option(rs.option.exposure, self.exposure)
+        
+        self.color_sensor.set_option(rs.option.enable_auto_white_balance, self.auto_wb)
 
-            # Capture frames
-            frames = self.pipeline.wait_for_frames()
-            aligned_frames = self.align.process(frames)
+        if self.debugging and self.color_sensor.get_option(rs.option.exposure) != self.exposure:
+            print(f'Exposure level: {self.color_sensor.get_option(rs.option.exposure)}')
+            print(f'Desired exposure level: {self.exposure}')
 
-            depth_frame = aligned_frames.get_depth_frame()
-            color_frame = aligned_frames.get_color_frame()
-
-            if not depth_frame or not color_frame:
-                raise RuntimeError("Could not acquire both color and depth frames.")
-
-            # Generate pointcloud
-            points = self.pc.calculate(depth_frame)
-            self.pc.map_to(color_frame)
-
-            # Convert to numpy
-            color_image = np.asanyarray(color_frame.get_data())
-            vtx = np.asanyarray(points.get_vertices()).view(np.float32).reshape(-1, 3)
-
-            # reshape xyz to same resolution as rgb
-            h, w = color_image.shape[:2]
-            xyz_image = vtx.reshape(h, w, 3)
-
-            # Save outputs exactly the same
-
-            if self.debugging:
-                cv2.imwrite(self.save_path + 'data/debugging/raw_rgb.png', color_image)
-                print('Raw RGB image saved')
-
-            np.savez_compressed(self.save_path + "data/rgb_xyz_capture.npz",
-                                color=color_image,
-                                xyz=xyz_image)
-            print('Capture NPZ saved')
+        if not self.auto_wb and self.wb:
+            self.color_sensor.set_option(rs.option.white_balance, self.wb)
     
-        finally:
-            self.shutdown()
+    # Applying colormap to depth image
+    def normalize_cmap(self,img):
+        valid = img[img > 0]
+        img_min = valid.min()
+        img_max = valid.max()
+        img_norm = np.zeros_like(img, dtype=np.uint8)
+        img_norm[img > 0] = (((img[img > 0] - img_min) /
+                              (img_max - img_min)) * 255).astype(np.uint8)
+        
+        return cv2.applyColorMap(img_norm, cv2.COLORMAP_JET)
+
+    def convert_to_xyz(self,points):
+        v, t = points.get_vertices(), points.get_texture_coordinates()
+        xyz = np.asanyarray(v).view(np.float32).reshape(-1, 3)
+        uv = np.asanyarray(t).view(np.float32).reshape(-1, 2)
+        
+        # Extract XYZ and UV
+        X = xyz[:,0]
+        Y = xyz[:,1]
+        Z = xyz[:,2]
+        u = uv[:,0]
+        v = uv[:,1]
+
+        H = int(self.h / 2)
+        W = int(self.w / 2)
+        
+        # Convert normalized UV → pixel indices
+        cols = (u * (W - 1)).astype(np.int32)
+        rows = (v * (H - 1)).astype(np.int32)
+
+        # Allocate output XYZ image
+        xyz_image = np.zeros((H, W, 3), dtype=np.float32)
+        xyz_image[rows, cols] = np.column_stack((X, Y, Z))
+
+        # Resize to proper size
+        xyz_image = cv2.resize(xyz_image, (self.w, self.h), interpolation=cv2.INTER_NEAREST)
+
+        return xyz_image
+    
+    def write_ply(self,xyz, rgb):
+        filename = self.save_path + 'data/debugging/xyz.ply'
+        points = xyz.reshape(-1,3)
+        colors = rgb.reshape(-1,3)
+        valid = points[:,2] > 0
+        pts = np.hstack((points[valid], colors[valid])).astype(np.float32)
+
+        with open(filename, 'w') as f:
+            f.write("ply\nformat ascii 1.0\n")
+            f.write(f"element vertex {pts.shape[0]}\n")
+            f.write("property float x\nproperty float y\nproperty float z\n")
+            f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
+            f.write("end_header\n")
+            for x,y,z,r,g,b in pts:
+                f.write(f"{x} {y} {z} {int(r)} {int(g)} {int(b)}\n")
+
+    def capture(self):
+        while True:
+            start = time.time()
+            try:
+                self.configure_image()
+                # Let camera settle
+                for _ in range(5):
+                    _ = self.pipeline.wait_for_frames()
+                
+                for _ in range(self.temporal_length):
+                    # Capture frames
+                    frames = self.pipeline.wait_for_frames()
+                    aligned_frames = self.align.process(frames)
+
+                    depth_frame = aligned_frames.get_depth_frame()
+                    color_frame = aligned_frames.get_color_frame()
+
+                    if not depth_frame or not color_frame:
+                        raise RuntimeError("Could not acquire both color and depth frames.")
+
+                    depth_frame = self.decimate.process(depth_frame)
+                    depth_frame = self.threshold.process(depth_frame)
+                    depth_frame = self.depth_to_disparity.process(depth_frame)
+                    depth_frame = self.spatial.process(depth_frame)
+                    depth_frame = self.temporal.process(depth_frame)
+                    depth_frame = self.disparity_to_depth.process(depth_frame)
+                    depth_frame = self.hole_filling.process(depth_frame)
+                    
+                # Generate pointcloud
+                self.pc.map_to(color_frame)
+                points = self.pc.calculate(depth_frame)
+                xyz_image = self.convert_to_xyz(points)
+                
+                # Convert to numpy
+                color_image = np.asanyarray(color_frame.get_data())
+                depth_image = np.asanyarray(depth_frame.get_data())
+                
+                depth_colormap = self.normalize_cmap(depth_image)
+                
+                if self.debugging:
+                    cv2.imwrite(self.save_path + 'data/debugging/raw_rgb.png', color_image)
+                    cv2.imwrite(self.save_path + 'data/debugging/raw_depth.png', depth_colormap)
+                    print('Raw RGB and Depth image saved')
+                    end = time.time()
+                    time_elapsed = end - start
+                    self.write_ply(xyz_image,color_image)
+                    print(f'Took {time_elapsed*1000} ms')
+
+                np.savez_compressed(self.save_path + "data/rgb_xyz_capture.npz",
+                                    color=color_image,
+                                    xyz=xyz_image)
+                print('Capture NPZ saved')
+                break
+
+            except RuntimeError:
+                print("Device was reset due to a runtime error. Retrying capture...")
+                self.reset()
+                continue
+            finally:
+                self.shutdown()
+    
+    def reset(self):
+        ctx = rs.context()
+        list = ctx.query_devices()
+        for dev in list:
+            dev.hardware_reset()
+        time.sleep(1)
 
     def shutdown(self):
         self.pipeline.stop()
+        print('Camera pipeline ended')
 
 # Everything related to image processing
 class ImageProcessor:
@@ -268,16 +387,14 @@ class ImageProcessor:
             return full_mask
 
     def align_mask(self,mask):
-        i = 0
         try:
-            while True:
+            for i in range(50):
                 cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 c = max(cnts, key=cv2.contourArea)
                 rect = cv2.minAreaRect(c)
                 angle = rect[2]
 
-                w, h = rect[1]
-                if w < h:
+                if rect[1][0] < rect[1][1]:
                     angle += 90
 
                 angle += -abs(angle)/angle*90
@@ -294,33 +411,27 @@ class ImageProcessor:
                 mask_rot  = warp(mask, interp=cv2.INTER_NEAREST)
                 xyz_rot   = np.dstack([warp(self.xyz[...,c],interp=cv2.INTER_NEAREST) for c in range(3)])
 
-                mask_rows = np.any(mask_rot != 0, axis=1)
-                mask_cols = np.any(mask_rot != 0, axis=0)
+                x_,y_,w_,h_ = cv2.boundingRect(mask_rot)
 
-                mask_clip = mask_rot[np.ix_(mask_rows, mask_cols)]
-                rgb_clip = rgb_rot[np.ix_(mask_rows, mask_cols)]
-                xyz_clip = xyz_rot[np.ix_(mask_rows, mask_cols)]
+                mask_clip = mask_rot[y_:y_ + h_,x_:x_ + w_]
+                rgb_clip = rgb_rot[y_:y_ + h_,x_:x_ + w_]
+                xyz_clip = xyz_rot[y_:y_ + h_,x_:x_ + w_]
 
                 # Clip all the frames to the size of the mask for ease in path planning
                 h,w = mask_clip.shape
-
                 mask_offset = mask_clip[self.offset_px:h - self.offset_px, self.offset_px:w - self.offset_px]
                 rgb_offset = rgb_clip[self.offset_px:h - self.offset_px, self.offset_px:w - self.offset_px]
                 xyz_offset = xyz_clip[self.offset_px:h - self.offset_px, self.offset_px:w - self.offset_px]
-                i += 1
-                print(np.nonzero(xyz_rot))
-                if np.all(mask_offset == 255) or i > 50:
-                    if self.debugging:
-                        for j in range(xyz_clip.shape[0]):
-                            for k in range(xyz_clip.shape[1]):
-                                if xyz_clip[j,k,0] != 0:
-                                    print(j,k,xyz_clip[j,k])
+
+                if np.all(mask_offset == 255):
                     break
+
         except Exception as e:
             print(f'Exception: {e}')
+
         finally:
-            cv2.imwrite(self.save_path + "data/debugging/aligned_mask.png", mask_offset)
-            if i > 50:
+            cv2.imwrite(self.save_path + "data/debugging/aligned_mask.png", rgb_offset)
+            if i > 48:
                 print('Alignment did not succeed within 50 iterations')
                 quit()
             np.savez_compressed(self.save_path + 'data/rgb_xyz_aligned.npz',
@@ -328,6 +439,19 @@ class ImageProcessor:
                             xyz=xyz_offset,
                             mask=mask_offset)
             print('Aligned NPZ Saved')
+
+    def pointcloud(self):
+        import open3d as o3d
+        origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=100, origin=[0,0,0])
+        coords = np.asarray(list(zip(*np.nonzero(self.xyz))))
+        points = [self.xyz[i,j] for i,j in coords[:,:2]]
+        scalar = 1
+        points_f = [(float(i*scalar),float(j*scalar),float(k*scalar)) for i,j,k in points]
+        #print(points_f)
+        cloud = o3d.geometry.PointCloud()
+        cloud.points = o3d.utility.Vector3dVector(points_f)
+        
+        o3d.visualization.draw_geometries([cloud])
 
 if __name__ == '__main__':
     dir = 'ml_vision/'
@@ -337,14 +461,16 @@ if __name__ == '__main__':
     camera.exposure = 200
     camera.auto_wb = False
     camera.wb = 3000
+    camera.debugging = True
     #camera.capture()
+    #quit()
     img = ImageProcessor(save_path=dir)
     img.debugging = True
-    #img.model = torch.hub.load(dir + 'yolov5','custom',path=dir + model_name,force_reload=True,source='local')
-    img.load_npz('rgb_xyz_base.npz')
-
+    img.model = torch.hub.load(dir + 'yolov5','custom',path=dir + model_name,force_reload=True,source='local')
+    img.load_npz('rgb_xyz_capture.npz')
+    
     img.targ_class='build_cylinder'
-
-    #mask = img.get_oriented_bbox()
-    mask = cv2.imread('ml_vision/data/debugging/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
+    #img.pointcloud()
+    mask = img.get_oriented_bbox()
+    #mask = cv2.imread('ml_vision/data/debugging/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
     img.align_mask(mask)

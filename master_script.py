@@ -20,7 +20,9 @@ if __name__ == "__main__":
         img.debugging = True
         img.targ_class='build_cylinder'
         img.model_name = 'best.pt'
+
         pln = PathPlanner(save_path='path_planning/')
+        pln.cluster_size = 30
 
         p_home = [-1.57, -1.308, -2.268, -1.136, 1.571, 0.001] # absolute
         p_scan_0 = [-1.26, -1.898, -2.473, 1.223, 1.255, -0.002] # absolute
@@ -28,20 +30,19 @@ if __name__ == "__main__":
         p_prevac = [-1.396, -2.371, -1.15, -1.19, 1.588, 0.029] #absolute
 
         # Actual logic
-        #rob.set_tcp('base')
-        #rob.moveJ(p_home)
-        #rob.set_tcp('camera')
-        #rob.moveJ(p_scan_0)
-        #rob.moveJ(p_scan)
-        #camera.capture()
-        #rob.convert_to_base(vision + 'data/')
-        #img.load_npz('rgb_xyz_base.npz')
-        #mask = img.get_oriented_bbox()
-        #img.align_mask(mask)
+        rob.set_tcp('base')
+        rob.moveJ(p_home)
+        rob.set_tcp('camera')
+        rob.moveJ(p_scan_0)
+        rob.moveJ(p_scan)
+        camera.capture()
+        rob.convert_to_base(vision + 'data/')
+        img.load_npz('rgb_xyz_base.npz')
+        mask = img.get_oriented_bbox()
+        img.align_mask(mask)
         #rob.check_testing()
-        #rob.moveJ(p_prevac)
+        rob.moveJ(p_prevac)
         pln.load_npz(vision + 'data/rgb_xyz_aligned.npz')
-        #pln.compute_average_height()
         pln.compute_path()
         rob.move_path('path_planning/data/robot_path.npz')
         rob.moveJ(p_home) 
