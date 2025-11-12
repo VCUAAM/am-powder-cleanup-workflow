@@ -11,8 +11,8 @@ if __name__ == "__main__":
     
         camera = RealSenseCamera(save_path=vision)
         camera.debugging = True 
-        camera.auto_exposure = False
-        camera.exposure = 200
+        camera.auto_exposure = True
+        camera.exposure = 141
         camera.auto_wb = False
         camera.wb = 3000
 
@@ -30,12 +30,13 @@ if __name__ == "__main__":
         p_prevac = [-1.396, -2.371, -1.15, -1.19, 1.588, 0.029] #absolute
 
         # Actual logic
-        rob.set_tcp('base')
-        rob.moveJ(p_home)
-        rob.set_tcp('camera')
-        rob.moveJ(p_scan_0)
+        #rob.set_tcp('base')
+        #rob.moveJ(p_home)
+        #rob.set_tcp('camera')
+        #rob.moveJ(p_scan_0)
         rob.moveJ(p_scan)
-        camera.capture()
+        #quit()
+        #camera.capture()
         rob.convert_to_base(vision + 'data/')
         img.load_npz('rgb_xyz_base.npz')
         mask = img.get_oriented_bbox()
@@ -44,8 +45,8 @@ if __name__ == "__main__":
         rob.moveJ(p_prevac)
         pln.load_npz(vision + 'data/rgb_xyz_aligned.npz')
         pln.compute_path()
-        rob.move_path('path_planning/data/robot_path.npz')
-        rob.moveJ(p_home) 
+        #rob.move_path('path_planning/data/robot_path.npz')
+        #rob.moveJ(p_home) 
 
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Disconnecting...")

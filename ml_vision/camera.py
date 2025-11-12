@@ -5,7 +5,7 @@ import platform
 import cv2
 import pyrealsense2 as rs
 import time
-from scipy.ndimage import distance_transform_edt
+from tqdm import tqdm
 class RealSenseCamera:
     def __init__(self,save_path = None):
         if not save_path:
@@ -16,8 +16,9 @@ class RealSenseCamera:
 
         # Camera parameters
         self.auto_exposure = True
-        self.exposure = None
+        self.exposure = 205
         self.auto_wb = True
+        self.brightness_goal = 180
         self.wb = None
         self.set_emitter = True
         self.h = 480
@@ -74,10 +75,11 @@ class RealSenseCamera:
 
     def configure_image(self):
         self.depth_sensor.set_option(rs.option.emitter_enabled, self.set_emitter)
-        self.color_sensor.set_option(rs.option.enable_auto_exposure, self.auto_exposure)
-        
-        if not self.auto_exposure and self.exposure:
-            self.color_sensor.set_option(rs.option.exposure, self.exposure)
+        self.color_sensor.set_option(rs.option.enable_auto_exposure, False)
+        self.color_sensor.set_option(rs.option.exposure, self.exposure)
+
+        if self.auto_exposure:
+            self.calibrate_exposure()
         
         self.color_sensor.set_option(rs.option.enable_auto_white_balance, self.auto_wb)
 
@@ -88,6 +90,56 @@ class RealSenseCamera:
         if not self.auto_wb and self.wb:
             self.color_sensor.set_option(rs.option.white_balance, self.wb)
     
+    def get_bright_diff(self,exposure):
+        self.color_sensor.set_option(rs.option.exposure, exposure)
+        avg = []
+
+        for _ in range(5):
+            _ = self.pipeline.wait_for_frames()
+
+        for _ in range(50):
+            frame = self.pipeline.wait_for_frames()
+            rgb_f = frame.get_color_frame()
+            rgb_i = np.asanyarray(rgb_f.get_data())
+            gray = cv2.cvtColor(rgb_i, cv2.COLOR_BGR2GRAY)
+            avg.append(np.mean(gray))
+        avg = np.asarray(avg)
+        mean = np.mean(avg)
+        std = np.std(avg)
+
+        mask = abs(avg - mean) < 2*std
+        avg = np.mean(avg[mask])
+
+        return avg - self.brightness_goal
+        
+    def calibrate_exposure(self):
+        exposure = self.exposure
+        if abs(self.get_bright_diff(exposure)) < .5:
+            return
+
+        print('Calibrating exposure')
+        pbar = tqdm(range(50), leave=False)
+        for i in pbar:
+            dif = self.get_bright_diff(exposure)
+
+            if abs(dif) < .3:
+                pbar.update(50 - i)
+                if self.debugging:
+                    print(f'Exposure level set to {exposure} from {self.exposure}')
+                break
+            elif abs(dif) > 1:
+                exposure -= int(dif)
+            elif -1 < dif < -.3:
+                exposure += 1
+            else:
+                exposure -= 1
+
+            exposure = round(exposure,0)
+        
+        if i > 48:
+            print('Exposure failed to calibrate properly')
+
+
     # Applying colormap to depth image
     def normalize_cmap(self,img):
         valid = img[img > 0]
@@ -232,7 +284,7 @@ class ImageProcessor:
         self.model_name = 'best.pt'
 
         # Image Processing Parameters
-        self.border_exp = 5 # Amount to increase size of image to ensure complete capture of target 
+        self.border_exp = 2 # Amount to increase size of image to ensure complete capture of target 
         self.targ_class = None
         self.offset_px = 10 # Amount of px to constrict image to give clearance around vacuum nozzle
 
@@ -249,6 +301,76 @@ class ImageProcessor:
             pathlib.WindowsPath = pathlib.PosixPath
 
         torch.serialization.safe_globals([np._core.multiarray._reconstruct])
+    
+    def write_ply(self,xyz, rgb):
+        filename = self.save_path + 'data/debugging/xyz_clip.ply'
+        points = xyz.reshape(-1,3)
+        colors = rgb.reshape(-1,3)
+        valid = points[:,2] > 0
+        pts = np.hstack((points[valid], colors[valid])).astype(np.float32)
+
+        with open(filename, 'w') as f:
+            f.write("ply\nformat ascii 1.0\n")
+            f.write(f"element vertex {pts.shape[0]}\n")
+            f.write("property float x\nproperty float y\nproperty float z\n")
+            f.write("property uchar red\nproperty uchar green\nproperty uchar blue\n")
+            f.write("end_header\n")
+            for x,y,z,r,g,b in pts:
+                f.write(f"{x} {y} {z} {int(r)} {int(g)} {int(b)}\n")
+
+    def real_rect_size(self,xyz):
+        """
+        Given an (H, W, 3) array of real-space coordinates,
+        compute the physical width (x-direction) and height (y-direction)
+        by averaging the left/right and top/bottom edges respectively.
+        """
+        # Drop invalid points (NaN or 0) if needed
+        xyz = np.nan_to_num(xyz)
+
+        # Compute mean of left and right edges (averaging over rows)
+        left_mean  = np.nanmean(xyz[:, 0, 0])   # average X of left column
+        right_mean = np.nanmean(xyz[:, -1, 0])  # average X of right column
+
+        # Compute mean of top and bottom edges (averaging over columns)
+        top_mean    = np.nanmean(xyz[0, :, 1])  # average Y of top row
+        bottom_mean = np.nanmean(xyz[-1, :, 1]) # average Y of bottom row
+
+        # Differences in world coordinates
+        width  = int(abs(right_mean - left_mean)*1000)
+        height = int(abs(bottom_mean - top_mean)*1000)
+
+        cx = int((right_mean + left_mean)*500)
+        cy = int((top_mean + bottom_mean)*500)
+        
+        top = int(top_mean*1000)
+        bottom = int(bottom_mean*1000)
+        left = int(left_mean*1000)
+        right = int(right_mean*1000)
+
+        print(f'Size of box: {(width,height)} mm')
+        print(f'Center of box: {(cx,cy)} mm')
+        print(f'Top, Bottom: {top,bottom} mm')
+        print(f'Left, Right: {left,right} mm')
+
+    def shrink_box(self,rect):
+        """
+        Shrink (offset < 0) or expand (offset > 0) a rotated rectangle
+        returned by cv2.minAreaRect by a fixed amount in all directions.
+        """
+
+        (cx, cy), (w, h), angle = rect
+
+        # Reduce or increase width and height
+        new_w = max(w - 2 * self.offset_px, 1)  # prevent negative or zero
+        new_h = max(h - 2 * self.offset_px, 1)
+
+        # Create new, smaller rectangle
+        new_rect = ((cx, cy), (new_w, new_h), angle)
+
+        box = cv2.boxPoints(new_rect)
+        box = np.int32(box).reshape((-1,1,2))
+        
+        return box + np.array([[self.x_lo, self.y_lo]])
 
     def load_npz(self,name):
         data = np.load(self.save_path + 'data/' + name)
@@ -312,7 +434,7 @@ class ImageProcessor:
             
             # Detecting Hough lines from Canny edges
             lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=11,
-                                    minLineLength=150, maxLineGap=50)
+                                    minLineLength=250, maxLineGap=200)
             
             # Draw Hough lines
             vis_hough = bounded.copy()
@@ -333,13 +455,16 @@ class ImageProcessor:
             rect = cv2.minAreaRect(pts)        # center, (w,h), angle
             box = cv2.boxPoints(rect)          # 4 rotated corners
             box = np.int32(box).reshape((-1,1,2))
-
+            
             # --- shift box into full image coordinates ---
             box_full = box + np.array([[self.x_lo, self.y_lo]])
-
+            
+            shrink_box = self.shrink_box(rect)
+            
             # visualize on full RGB image
             vis_rect = self.rgb.copy()
-            cv2.drawContours(vis_rect, [box_full], 0, (255, 0, 0), 2)
+            cv2.drawContours(vis_rect, [box_full], 0, (255, 0, 0), 1)
+            cv2.drawContours(vis_rect, [shrink_box], 0, (0, 0, 255), 1)
 
             # ------ Correct way to build mask (avoids clipped box) ------
             full_mask = np.zeros(self.rgb.shape[:2], dtype=np.uint8)
@@ -353,15 +478,14 @@ class ImageProcessor:
                 # Saving images if visualization
                 if self.debugging:
                     i = 0
-                    cv2.imwrite(self.save_path + 'data/debugging/clipped.png',bounded)
                     i += 1
                     cv2.imwrite(self.save_path + 'data/debugging/edges.png',edges)
                     i += 1
                     cv2.imwrite(self.save_path + 'data/debugging/thresh.png',thresh)
                     i += 1
-                    cv2.imwrite(self.save_path + 'data/debugging/bbox.png',vis_rect)
-                    i += 1
                     cv2.imwrite(self.save_path + 'data/debugging/hough.png',vis_hough)
+                    i += 1
+                    cv2.imwrite(self.save_path + 'data/debugging/bbox.png',vis_rect)
                     i += 1
                     cv2.imwrite(self.save_path + 'data/debugging/bounded_mask.png',full_mask)
                     print('All image processing debugging images saved')
@@ -377,9 +501,9 @@ class ImageProcessor:
                     case 3:
                         img = 'thresh.png'
                     case 4:
-                        img = 'bbox.png'
+                        img = 'hough.png'
                     case 5:
-                        img = 'Vis_Hough'
+                        img = 'bbox.png'
                 print('Something broke, check test images to see why')
                 print(f'Last image that worked was {img}')
                 quit()
@@ -413,15 +537,12 @@ class ImageProcessor:
 
                 x_,y_,w_,h_ = cv2.boundingRect(mask_rot)
 
-                mask_clip = mask_rot[y_:y_ + h_,x_:x_ + w_]
-                rgb_clip = rgb_rot[y_:y_ + h_,x_:x_ + w_]
-                xyz_clip = xyz_rot[y_:y_ + h_,x_:x_ + w_]
-
-                # Clip all the frames to the size of the mask for ease in path planning
-                h,w = mask_clip.shape
-                mask_offset = mask_clip[self.offset_px:h - self.offset_px, self.offset_px:w - self.offset_px]
-                rgb_offset = rgb_clip[self.offset_px:h - self.offset_px, self.offset_px:w - self.offset_px]
-                xyz_offset = xyz_clip[self.offset_px:h - self.offset_px, self.offset_px:w - self.offset_px]
+                mask_offset = mask_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
+                rgb_offset = rgb_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
+                xyz_offset = xyz_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
+                
+                if self.debugging:
+                    self.real_rect_size(xyz_offset)
 
                 if np.all(mask_offset == 255):
                     break
@@ -457,20 +578,19 @@ if __name__ == '__main__':
     dir = 'ml_vision/'
     model_name = 'best.pt'
     camera = RealSenseCamera(save_path=dir)
-    camera.auto_exposure = False
-    camera.exposure = 200
+    camera.auto_exposure = True
+    camera.exposure = 141
     camera.auto_wb = False
     camera.wb = 3000
     camera.debugging = True
     #camera.capture()
-    #quit()
+
     img = ImageProcessor(save_path=dir)
     img.debugging = True
-    img.model = torch.hub.load(dir + 'yolov5','custom',path=dir + model_name,force_reload=True,source='local')
-    img.load_npz('rgb_xyz_capture.npz')
+    img.load_npz('rgb_xyz_base.npz')
     
     img.targ_class='build_cylinder'
-    #img.pointcloud()
+
     mask = img.get_oriented_bbox()
     #mask = cv2.imread('ml_vision/data/debugging/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
     img.align_mask(mask)

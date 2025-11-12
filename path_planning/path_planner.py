@@ -12,7 +12,7 @@ class PathPlanner:
         if not save_path:
             print('Path planner needs to be initialized with a save path')
             quit()
-        self.cluster_size = 10
+        self.cluster_size = 30
         self.obstacle = None
         self.save_path = save_path
         self.smooth = True # If true, will smooth polygon offsets
@@ -35,9 +35,11 @@ class PathPlanner:
             patch = Polygon(smooth_poly, closed=True, facecolor='black', edgecolor='black')
             ax.add_patch(patch)
 
+        h,w = self.mask.shape
+
         ax.set_aspect('equal', adjustable='box')
-        ax.set_xlim(0, max(path[:, 0]) + 5)
-        ax.set_ylim(0, max(path[:, 1]) + 5)
+        ax.set_xlim(0, w)
+        ax.set_ylim(0, h)
 
         # ------- RED → GREEN gradient path -------
         # Build line segments from successive points
@@ -111,6 +113,7 @@ class PathPlanner:
     # --------- GRID COMPUTATION ----------
     def compute_grid(self):
         h, w = self.mask.shape
+        
         clusters_h = h // self.cluster_size
         clusters_w = w // self.cluster_size
 
@@ -124,13 +127,14 @@ class PathPlanner:
             bounded[y:y + h, x:x + w] = 0
         
         grid = np.zeros((clusters_h, clusters_w), dtype=np.uint8)
+
         for i in range(clusters_h):
             for j in range(clusters_w):
                 block = bounded[i * self.cluster_size:(i + 1) * self.cluster_size,
                                 j * self.cluster_size:(j + 1) * self.cluster_size]
                 if np.any(block > 0):
                     grid[i, j] = 1
-        
+
         return grid
 
     def compute_average_height(self):
@@ -229,10 +233,8 @@ class PathPlanner:
     # --------- MAIN ENTRY POINT ----------
     def compute_path(self):
         grid = self.compute_grid()
-        h_m, w_m = self.mask.shape
         h, w = grid.shape
-        path_px = []
-
+        
         ys, xs = np.where(grid == 0)
 
         if len(xs) == 0 or len(ys) == 0:
@@ -244,11 +246,25 @@ class PathPlanner:
             boundaries = [ys.min(), ys.max(), xs.min(), xs.max()]
             path = self.path_planner(h, w, boundaries)
 
-        for (i, j) in path:
-            cy = i * self.cluster_size + self.cluster_size // 2
-            cx = j * self.cluster_size + self.cluster_size // 2
-            cy = cy - 1 if cy == h_m else cy
-            cx = cx - 1 if cx == w_m else cx
+        path_clean = [path[0],path[-1]]
+
+        for i in range(1,len(path) - 1):
+            if abs(path[i - 1][0] - path[i][0]) == 0 and abs(path[i][0] - path[i + 1][0]) == 0:
+                continue
+            elif abs(path[i - 1][1] - path[i][1]) == 0 and abs(path[i][1] - path[i + 1][1]) == 0:
+                continue
+            else:
+                path_clean.insert(-1,path[i])
+
+        path_px = []
+        
+        # Compute leftover pixels and center the grid
+        pad_y = (h - h // self.cluster_size * self.cluster_size)
+        pad_x = (w - w // self.cluster_size * self.cluster_size)
+
+        for (i, j) in path_clean:
+            cy = i * self.cluster_size + pad_y + self.cluster_size // 2 
+            cx = j * self.cluster_size + pad_x + self.cluster_size // 2 
             path_px.append((cy, cx))
 
         if self.obstacle:
@@ -260,9 +276,10 @@ class PathPlanner:
                     path_px.append((i, j))
                     path.append((i / self.cluster_size, j / self.cluster_size))
         
-        self.visualizer(np.asarray(path_px))
         robot_path = [self.xyz[i, j] for (i, j) in path_px]
-
+        print([(int(1000*i),int(1000*j),int(1000*k)) for (i,j,k) in robot_path])
+        self.visualizer(np.asarray(path_px))
+        
         np.savez_compressed(self.save_path + "data/robot_path.npz",path=robot_path)
         print('Saved robot path NPZ')
 

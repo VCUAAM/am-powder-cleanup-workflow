@@ -27,7 +27,12 @@ class UR5Robot:
                 root.destroy()
                 continue
             break
-        
+        self.d2c_R = np.asarray([[0.999954,    0.00596813, 0.00749689],    
+                                [-0.00595368, 0.99998,   -0.00194843],
+                                [-0.00750837, 0.0019037,  0.99997]])
+
+        self.d2c_T = np.asarray([0.0147571573033929,  -2.052240051853e-05,  0.000543851230759174])
+
         print("Connected. Press Ctrl+C to stop.")
     
     def check_testing(self):
@@ -54,31 +59,24 @@ class UR5Robot:
             time.sleep(0.1)
 
     # ---------- Converted Functions (same functionality) ----------
-    def get_path(self, cart_path, tcp, vel=0.25, acc=0.5, blend=0.05):
+    def get_path(self, cart_path, tcp, vel=0.25, acc=0.1, blend=0.002):
         if self.testing:
             vel = 0.05
-    
+            tcp = [0, pi, 0]
+
         path = []
         for p in cart_path:
-            point = [p[0], p[1], p[2], tcp[0], tcp[1], tcp[2], vel, acc, blend]
-            point = [round(float(i),4) for i in point]
-            path.append(point)
-        
-        path_clean = [path[0]]
-        for i in range(1,len(path) - 1):
-            if abs(path[i - 1][0] - path[i][0]) < self.path_tolerance and abs(path[i][0] - path[i + 1][0]) < self.path_tolerance:
-                continue
-            elif abs(path[i - 1][1] - path[i][1]) < self.path_tolerance and abs(path[i][1] - path[i + 1][1]) < self.path_tolerance:
-                continue
-            else:
-                path_clean.append(path[i])
-        
-        path_clean.append(path[-1])
+            # Conditionally offset z if testing
+            z_val = p[2] + 0.055 if self.testing else p[2]
 
-        if self.debugging:
-            print(path_clean)
-            quit()
-        return path_clean
+            point = [p[0], p[1], z_val, tcp[0], tcp[1], tcp[2], vel, acc, blend]
+            point = [round(float(i), 4) for i in point]
+            path.append(point)
+
+        if self.testing:
+            print(print([(int(1000*i),int(1000*j),int(1000*k)) for (i,j,k) in cart_path]))
+
+        return path
 
     def move_path(self,npz):
         self.set_tcp('base')
@@ -97,7 +95,7 @@ class UR5Robot:
 
     def set_tcp(self, frame='base'):
         tcp_base = [0, 0, 0, 0, 0, 0]
-        tcp_cam = [-.0175, -0.01919, 0.03125, -1.57, 0, 0]
+        tcp_cam = [-.0175, -0.03125, 0.00979, -1.57, 0, 0]
         tcp_vac = [0.06814, 0, 0.12692, 0, 0, 0]
 
         match frame:
@@ -134,32 +132,37 @@ class UR5Robot:
 
         self.set_tcp('vacuum')
         offset = np.asarray(self.rtde_c.getTCPOffset()[:3])
-
-        if self.testing:
-            offset[2] += 0.05
-
+        offset = offset + self.d2c_T
         xyz_base = np.zeros_like(xyz)
 
         for i in range(xyz.shape[0]):
             for j in range(xyz.shape[1]):
-                p = np.matmul(r_rot,xyz[i,j])
+                #r_tot = np.matmul(r_rot,self.d2c_R)
+                r_tot = np.matmul(self.d2c_R,r_rot)
+                p = np.matmul(r_tot,xyz[i,j])
                 if p[0] != 0:
                     p = p + pos + offset
                 xyz_base[i,j] = p
-                if p[0] != 0:
-                    if self.debugging:
-                        print(i,j,xyz_base[i,j])
 
         np.savez_compressed(save_path + 'rgb_xyz_base.npz',color=rgb,xyz=xyz_base)
         print(f"Saved NPZ with robot {'testing' if self.testing else 'base frame'} coordinates")
 
     def get_tcp(self):
-        return self.rtde_r.getActualTCPPose()
+        tcp = self.rtde_r.getActualTCPPose()
+        if self.debugging:
+            print(f'Current pose: {tcp}')
+        return tcp
     
     def moveJ(self, pos, abs_j=True):
         if not abs_j:
             pos = self.rtde_c.getInverseKinematics(pos)
         self.rtde_c.moveJ(pos)
+        self.steady_check()
+
+    def moveL(self, pos, abs_j=True):
+        if not abs_j:
+            pos = self.rtde_c.getInverseKinematics(pos)
+        self.rtde_c.moveL(pos)
         self.steady_check()
 
     def shutdown(self,reset=True):
@@ -180,9 +183,15 @@ if __name__ == "__main__":
     try:
         rob = UR5Robot()
         rob.testing = True
-        rob.debugging = False
+        rob.debugging = True
         time.sleep(2)
-        rob.move_path('path_planning/data/robot_path.npz')
+        rob.convert_to_base("ml_vision/" + 'data/')
+        #rob.move_path('path_planning/data/robot_path.npz')
+        #test_pos = [[0.0612, -0.700, 0.2304,0,pi,0, 0.05, 0.5, 0.05], [-0.0683, -0.700, 0.2298, 0,pi,0, 0.05, 0.5, 0.05]]
+        #rob.rtde_c.moveL(test_pos)
+        #rob.get_tcp()
+        #rob.moveL(test_pos,abs_j=False)
+
         #rob.convert_to_base('ml_vision/data/')
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Disconnecting...")

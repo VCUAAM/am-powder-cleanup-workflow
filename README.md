@@ -14,8 +14,6 @@ mention that in order to use any of the machine learning aspects, yolov5 needs t
 
 maybe features? 
 
-- checking average white value of image after taking picture to adjust exposure value to make thresholding more consistent
 - move j5 of robot to align image to square with camera
 - make sure that all walls are approximately equal to "verify" bounding box
 - move robot automatically if entire build cylinder is not in image
-- need to correct matrix by color to depth offset extrinsic matrix
