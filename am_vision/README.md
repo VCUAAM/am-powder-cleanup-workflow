@@ -4,7 +4,7 @@ The `RealSenseCamera` class provides a complete, configurable interface for acqu
 
 This class is used to generate aligned RGB, depth, and XYZ data for downstream machine vision or robot perception modules.
 
-I generally found it more helpful to go to Google rather than trying to use the documentation on the Intel GitHub, but you do you
+> I generally found it more helpful to go to Google rather than trying to use the documentation on the Intel GitHub, but you do you
 ---
 
 ## Key Features
@@ -89,7 +89,7 @@ Each capture applies the following RealSense filters in sequence:
 
 The resulting frames are aligned to the color stream before XYZ conversion.
 
-If you are curious about the post-processing filters, read [here](URL = https://dev.realsenseai.com/docs/post-processing-filters)
+If you are curious about the post-processing filters, read [here](https://dev.realsenseai.com/docs/post-processing-filters)
 
 ---
 
