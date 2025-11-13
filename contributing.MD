@@ -74,3 +74,14 @@ Getting Set Up
     * SonarLint
       * https://marketplace.visualstudio.com/items?itemName=SonarSource.sonarlint-vscode
       
+## 🚀 Getting Started
+```bash
+git clone https://github.com/VCUAAM/vcu_am_post_processing.git
+cd vcu_am_post_processing
+pip install -r requirements.txt
+```
+
+Example:
+```bash
+python master_script.py
+```

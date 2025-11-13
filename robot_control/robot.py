@@ -6,6 +6,7 @@ import tkinter as tk
 from tkinter import messagebox
 import time
 from scipy.spatial.transform import Rotation as R
+
 class UR5Robot:
     def __init__(self, ip="192.168.1.102"):
         self.ip = ip
