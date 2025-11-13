@@ -286,7 +286,7 @@ class ImageProcessor:
         # Image Processing Parameters
         self.border_exp = 2 # Amount to increase size of image to ensure complete capture of target 
         self.targ_class = None
-        self.offset_px = 10 # Amount of px to constrict image to give clearance around vacuum nozzle
+        self.offset_px = 4 # Amount of px to constrict image to give clearance around vacuum nozzle
 
         # Obstacle parameters
         self.x_lo = None
@@ -370,7 +370,7 @@ class ImageProcessor:
         box = cv2.boxPoints(new_rect)
         box = np.int32(box).reshape((-1,1,2))
         
-        return box + np.array([[self.x_lo, self.y_lo]])
+        return box
 
     def load_npz(self,name):
         data = np.load(self.save_path + 'data/' + name)
@@ -428,13 +428,30 @@ class ImageProcessor:
             thresh = (gray_f - 160) * scale #gray_f - lo
             thresh = np.clip(thresh, 0, 255).astype(np.uint8)
             
+            # After thresholding
+            gray_f = gray.astype(np.float32)
+            scale = 255.0 / (220 - 160)
+            thresh = (gray_f - 160) * scale
+            thresh = np.clip(thresh, 0, 255).astype(np.uint8)
+
+            # Optional: Corner enhancement before Canny
+            corner_resp = cv2.preCornerDetect(thresh, ksize=5)
+            corner_resp = cv2.convertScaleAbs(corner_resp)
+
+            # Combine with threshold image to reinforce corners
+            enhanced = cv2.addWeighted(thresh, 0.8, corner_resp, 0.2, 0)
+
+            # Then continue with your existing Canny
+            blur = cv2.GaussianBlur(enhanced, (11,11), 0)
+            edges = cv2.Canny(blur, 1, 80)
+
             # Canny edge detection
-            blur = cv2.GaussianBlur(thresh, (11,11), 0)
-            edges = cv2.Canny(blur, 1, 70)
+            #blur = cv2.GaussianBlur(thresh, (11,11), 0)
+            #edges = cv2.Canny(blur, 1, 70)
             
             # Detecting Hough lines from Canny edges
             lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=11,
-                                    minLineLength=250, maxLineGap=200)
+                                    minLineLength=275, maxLineGap=200)
             
             # Draw Hough lines
             vis_hough = bounded.copy()
@@ -459,7 +476,7 @@ class ImageProcessor:
             # --- shift box into full image coordinates ---
             box_full = box + np.array([[self.x_lo, self.y_lo]])
             
-            shrink_box = self.shrink_box(rect)
+            shrink_box = self.shrink_box(rect) + np.array([[self.x_lo, self.y_lo]])
             
             # visualize on full RGB image
             vis_rect = self.rgb.copy()
@@ -512,7 +529,7 @@ class ImageProcessor:
 
     def align_mask(self,mask):
         try:
-            for i in range(50):
+            for i in range(10):
                 cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 c = max(cnts, key=cv2.contourArea)
                 rect = cv2.minAreaRect(c)
@@ -526,6 +543,7 @@ class ImageProcessor:
                 # --- build rotation matrix about the object centroid ---
                 M = cv2.getRotationMatrix2D((mask.shape[1]/2,mask.shape[0]/2), angle, 1.0)
 
+                print(M)
                 def warp(im, interp=cv2.INTER_LINEAR):
                     return cv2.warpAffine(im, M, (im.shape[1], im.shape[0]),
                                         flags=interp)#, borderMode=cv2.BORDER_CONSTANT)
@@ -544,16 +562,23 @@ class ImageProcessor:
                 if self.debugging:
                     self.real_rect_size(xyz_offset)
 
-                if np.all(mask_offset == 255):
-                    break
+                print(abs(mask_offset.shape[0] - mask_offset.shape[1])/max(mask_offset.shape[:2]))
+                if abs(mask_offset.shape[0] - mask_offset.shape[1])/max(mask_offset.shape[:2]) > .1:
+                    if i == 9:
+                        print('Bounding box wrong size')
+                        continue
+                    continue
+                
+                break
+        
 
         except Exception as e:
             print(f'Exception: {e}')
 
         finally:
             cv2.imwrite(self.save_path + "data/debugging/aligned_mask.png", rgb_offset)
-            if i > 48:
-                print('Alignment did not succeed within 50 iterations')
+            if i > 8:
+                print('Alignment did not succeed within 10 iterations')
                 quit()
             np.savez_compressed(self.save_path + 'data/rgb_xyz_aligned.npz',
                             color=rgb_offset,

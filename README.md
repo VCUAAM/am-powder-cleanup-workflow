@@ -15,5 +15,4 @@ The current implementation of is on a [Universal Robots UR5e](https://www.univer
 ## stuff to fix later when i have time
 
 - move j5 of robot to align image to square with camera
-- make sure that all walls are approximately equal to "verify" bounding box
 - move robot automatically if entire build cylinder is not in image
