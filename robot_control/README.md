@@ -4,9 +4,10 @@ The `UR5Robot` class provides a high-level Python interface for controlling a **
 
 This class is designed for **autonomous motion tasks** such as scanning, probing, or additive-manufacturing inspection.
 
-For extended usage with the `ur-rtde` package, please [read the documentation](URL = sdurobotics.gitlab.io/ur_rtde)
+For extended usage with the `ur-rtde` package, please [read the documentation](sdurobotics.gitlab.io/ur_rtde)
 
 One note - the `pip install` method for the `ur-rtde` package does not work with every version of Python. Check wheel compatability or build from source. 
+
 ---
 
 ## Key Features
