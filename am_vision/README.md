@@ -4,7 +4,8 @@ The `RealSenseCamera` class provides a complete, configurable interface for acqu
 
 This class is used to generate aligned RGB, depth, and XYZ data for downstream machine vision or robot perception modules.
 
-> I generally found it more helpful to go to Google rather than trying to use the documentation on the Intel GitHub, but you do you
+I generally found it more helpful to go to Google rather than trying to use the documentation on the Intel GitHub, but you do you
+
 ---
 
 ## Key Features
