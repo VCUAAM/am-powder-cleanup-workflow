@@ -8,18 +8,16 @@ from matplotlib.patches import Polygon
 mpl.use('TkAgg')
 
 class PathPlanner:
-    def __init__(self,save_path):
-        if not save_path:
-            print('Path planner needs to be initialized with a save path')
-            quit()
+    def __init__(self):
         self.cluster_size = 30
         self.obstacle = None
-        self.save_path = save_path
+        self.save_path = "path_planning/data/" # Where to save debugging files 
         self.smooth = True # If true, will smooth polygon offsets
         self.epsilon = .01 # Epsilon ratio for polygon smoothing function
+        self.debugging = False
 
-    def load_npz(self,npz):
-        data = np.load(npz)
+    def load_npz(self,name):
+        data = np.load('data/' + name)
         self.mask = data['mask']
         self.rgb = data["color"]
         self.xyz = data["xyz"]
@@ -53,8 +51,9 @@ class PathPlanner:
         lc = LineCollection(segments, colors=colors, linewidths=3)
         ax.add_collection(lc)
 
-        plt.savefig(self.save_path + 'data/path_overlay.png', bbox_inches='tight', pad_inches=.1)
-        print('Saved path overlay')
+        if self.debugging:
+            plt.savefig(self.save_path + 'path_overlay.png', bbox_inches='tight', pad_inches=.1)
+            print('Saved path overlay')
 
     # --------- OFFSET SINGLE POLYGON ----------
     def offset_polygon(self, polygon):
@@ -257,7 +256,7 @@ class PathPlanner:
                 path_clean.insert(-1,path[i])
 
         path_px = []
-        
+
         # Compute leftover pixels and center the grid
         pad_y = (h - h // self.cluster_size * self.cluster_size)
         pad_x = (w - w // self.cluster_size * self.cluster_size)
@@ -280,11 +279,11 @@ class PathPlanner:
         print([(int(1000*i),int(1000*j),int(1000*k)) for (i,j,k) in robot_path])
         self.visualizer(np.asarray(path_px))
         
-        np.savez_compressed(self.save_path + "data/robot_path.npz",path=robot_path)
+        np.savez_compressed("data/robot_path.npz",path=robot_path)
         print('Saved robot path NPZ')
 
 # ---------- Example main ----------
 if __name__ == "__main__":
-    pln = PathPlanner(save_path="path_planning/")
-    pln.load_npz('ml_vision/data/rgb_xyz_aligned.npz')
+    pln = PathPlanner()
+    pln.load_npz('rgb_xyz_base.npz')
     pln.compute_path()
