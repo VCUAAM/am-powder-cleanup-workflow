@@ -11,9 +11,9 @@ class RealSenseCamera:
         
         # Camera parameters
         self.auto_exposure = True # Importantly, enables custom auto exposure algorithm, does not use the built in one
-        self.exposure = 205
+        self.exposure = 280
         self.auto_wb = True
-        self.brightness_goal = 180 # If you adjust this, you will likely need to adjust the Canny edge detection in the ml_detect package
+        self.brightness_goal = 175 # If you adjust this, you will likely need to adjust the Canny edge detection in the ml_detect package
         self.wb = None
         self.set_emitter = True
         self.h = 480 
@@ -34,11 +34,13 @@ class RealSenseCamera:
         
         # Spatial filter parameters
         self.spatial = rs.spatial_filter()
-        self.spatial.set_option(rs.option.holes_fill, 2)
-        
+        self.spatial.set_option(rs.option.holes_fill, 1)
+        self.spatial.set_option(rs.option.filter_magnitude,1)
+        self.spatial.set_option(rs.option.filter_smooth_alpha,.5)
+        self.spatial.set_option(rs.option.filter_smooth_delta,50)
         # Temporal Filter
         self.temporal = rs.temporal_filter()
-        self.temporal_length = 15 # This is how many frames that will prime the filters before taking an actual image. 15 is the minimum I found that worked
+        self.temporal_length = 50 # This is how many frames that will prime the filters before taking an actual image. 15 is the minimum I found that worked
 
         # Depth domain
         self.disparity_to_depth = rs.disparity_transform(False)
@@ -66,7 +68,7 @@ class RealSenseCamera:
 
     # This runs before capturing an image, primarily calibrating exposure and white balance
     def configure_image(self):
-        self.depth_sensor.set_option(rs.option.emitter_enabled, self.set_emitter)
+        #self.depth_sensor.set_option(rs.option.emitter_enabled, self.set_emitter)
         self.color_sensor.set_option(rs.option.enable_auto_exposure, False)
         self.color_sensor.set_option(rs.option.exposure, self.exposure)
 
@@ -107,6 +109,7 @@ class RealSenseCamera:
     def calibrate_exposure(self):
         exposure = self.exposure
         max_iterations = 50
+        failed = False
 
         if abs(self.get_bright_diff(exposure)) < .5: # If it's already correct, don't bother calibrating
             return
@@ -139,7 +142,6 @@ class RealSenseCamera:
                 exposure -= 1
 
             exposure = round(exposure,0)
-        
             if i == 49:
                 failed = True
                 break
@@ -244,6 +246,7 @@ class RealSenseCamera:
                 color_image = np.asanyarray(color_frame.get_data())
                 depth_image = np.asanyarray(depth_frame.get_data())
                 
+                #depth_image = cv2.resize(depth_image, (self.w, self.h), interpolation=cv2.INTER_NEAREST)
                 depth_colorized = self.normalize_cmap(depth_image)
                 
                 if self.debugging:
@@ -257,6 +260,7 @@ class RealSenseCamera:
 
                 np.savez_compressed("data/rgb_xyz_capture.npz",
                                     color=color_image,
+                                    depth=depth_image,
                                     xyz=xyz_image)
                 print('Capture NPZ saved')
                 break
@@ -280,6 +284,6 @@ class RealSenseCamera:
 
 if __name__ == '__main__':
     camera = RealSenseCamera()
-    camera.auto_exposure = True
+    camera.auto_exposure = False
     camera.debugging = True
     camera.capture()

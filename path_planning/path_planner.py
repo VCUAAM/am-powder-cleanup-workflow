@@ -3,37 +3,47 @@ import cv2
 import matplotlib as mpl
 from matplotlib.collections import LineCollection
 import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon
+from matplotlib.patches import Polygon,Rectangle
 
 mpl.use('TkAgg')
 
 class PathPlanner:
     def __init__(self):
-        self.cluster_size = 30
+        self.cluster_size = 20
         self.obstacle = None
         self.save_path = "path_planning/data/" # Where to save debugging files 
         self.smooth = True # If true, will smooth polygon offsets
         self.epsilon = .01 # Epsilon ratio for polygon smoothing function
         self.debugging = False
+        self.border = 15
 
     def load_npz(self,name):
+        def clip_border(arr):
+            return arr[self.border:-self.border,self.border:-self.border]
         data = np.load('data/' + name)
         self.mask = data['mask']
+        self.mask = clip_border(self.mask)
         self.rgb = data["color"]
+        self.rgb = clip_border(self.rgb)
         self.xyz = data["xyz"]
+        self.xyz = clip_border(self.xyz)
 
     # --------- VISUALIZER ----------
-    def visualizer(self, path):
+    def visualizer(self, path,grid=False):
         fig, ax = plt.subplots()
-
-        # Draw polygon if present
-        if self.obstacle is not None:
-            obstacle = np.squeeze(self.obstacle)
-            smooth_poly = cv2.approxPolyDP(obstacle, 2.5, True).reshape(-1, 2)
-            patch = Polygon(smooth_poly, closed=True, facecolor='black', edgecolor='black')
-            ax.add_patch(patch)
-
         h,w = self.mask.shape
+        # Draw polygon if present
+        if self.obstacle.any():
+
+            if grid:
+                x, y, w_, h_ = cv2.boundingRect(self.obstacle)
+                patch = Rectangle((y - self.border,x - self.border),w_ + 2*self.border,h_ + 2*self.border,linewidth=1,edgecolor='black',facecolor='black')
+                ax.add_patch(patch)
+            else:
+                obstacle = np.squeeze(self.obstacle)
+                smooth_poly = cv2.approxPolyDP(obstacle, 2.5, True).reshape(-1, 2)
+                patch = Polygon(smooth_poly, closed=True, facecolor='black', edgecolor='black')
+                ax.add_patch(patch)
 
         ax.set_aspect('equal', adjustable='box')
         ax.set_xlim(0, w)
@@ -112,9 +122,13 @@ class PathPlanner:
     # --------- GRID COMPUTATION ----------
     def compute_grid(self):
         h, w = self.mask.shape
-        
+
         clusters_h = h // self.cluster_size
         clusters_w = w // self.cluster_size
+
+        # Compute leftover pixels and center the grid
+        self.pad_y = (h - clusters_h * self.cluster_size)
+        self.pad_x = (w - clusters_w * self.cluster_size)
 
         inverted = cv2.bitwise_not(self.mask)
         mask_contour, _ = cv2.findContours(inverted, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -123,16 +137,16 @@ class PathPlanner:
         if mask_contour:
             self.obstacle = max(mask_contour, key=cv2.contourArea)
             x, y, w, h = cv2.boundingRect(self.obstacle)
-            bounded[y:y + h, x:x + w] = 0
-        
-        grid = np.zeros((clusters_h, clusters_w), dtype=np.uint8)
+            bounded[y - self.border:y + h + 2*self.border, x - self.border:x + w + 2*self.border] = 0
+            
+        grid = np.ones((clusters_h, clusters_w), dtype=np.uint8)
 
         for i in range(clusters_h):
             for j in range(clusters_w):
-                block = bounded[i * self.cluster_size:(i + 1) * self.cluster_size,
-                                j * self.cluster_size:(j + 1) * self.cluster_size]
-                if np.any(block > 0):
-                    grid[i, j] = 1
+                    block = bounded[i * self.cluster_size + self.pad_x:(i + 1) * self.cluster_size + self.pad_x,
+                                    j * self.cluster_size + self.pad_y:(j + 1) * self.cluster_size + self.pad_y]
+                    if np.any(block == 0):
+                        grid[i, j] = 0
 
         return grid
 
@@ -164,7 +178,8 @@ class PathPlanner:
             upp = left
             low = 0
             dir_adj = 0
-
+        
+        print(top,bottom)
         for j in range(path[-1][1] + 1, top + 1):
             if j % 2 == 0:
                 path.append((low + dir_adj, j))
@@ -233,7 +248,7 @@ class PathPlanner:
     def compute_path(self):
         grid = self.compute_grid()
         h, w = grid.shape
-        
+
         ys, xs = np.where(grid == 0)
 
         if len(xs) == 0 or len(ys) == 0:
@@ -248,25 +263,21 @@ class PathPlanner:
         path_clean = [path[0],path[-1]]
 
         for i in range(1,len(path) - 1):
-            if abs(path[i - 1][0] - path[i][0]) == 0 and abs(path[i][0] - path[i + 1][0]) == 0:
+            if abs(path[i - 1][0] - path[i][0]) == 0 and abs(path[i][0] - path[i + 1][0]) == 0 and path[i - 1][0] != path[i + 1][0]:
                 continue
-            elif abs(path[i - 1][1] - path[i][1]) == 0 and abs(path[i][1] - path[i + 1][1]) == 0:
+            elif abs(path[i - 1][1] - path[i][1]) == 0 and abs(path[i][1] - path[i + 1][1]) == 0 and path[i - 1][1] != path[i + 1][1]:
                 continue
             else:
                 path_clean.insert(-1,path[i])
 
         path_px = []
 
-        # Compute leftover pixels and center the grid
-        pad_y = (h - h // self.cluster_size * self.cluster_size)
-        pad_x = (w - w // self.cluster_size * self.cluster_size)
-
         for (i, j) in path_clean:
-            cy = i * self.cluster_size + pad_y + self.cluster_size // 2 
-            cx = j * self.cluster_size + pad_x + self.cluster_size // 2 
+            cy = i * self.cluster_size - self.pad_y + self.cluster_size // 2 
+            cx = j * self.cluster_size - self.pad_x + self.cluster_size // 2 
             path_px.append((cy, cx))
-
-        if self.obstacle:
+        print(path_px)
+        if self.obstacle is not None:
             offset_polygons = self.generate_offset_polygons()
 
             for layer in offset_polygons:
@@ -275,9 +286,9 @@ class PathPlanner:
                     path_px.append((i, j))
                     path.append((i / self.cluster_size, j / self.cluster_size))
         
+        self.visualizer(np.asarray(path_px),grid=True)
         robot_path = [self.xyz[i, j] for (i, j) in path_px]
         print([(int(1000*i),int(1000*j),int(1000*k)) for (i,j,k) in robot_path])
-        self.visualizer(np.asarray(path_px))
         
         np.savez_compressed("data/robot_path.npz",path=robot_path)
         print('Saved robot path NPZ')
@@ -285,5 +296,6 @@ class PathPlanner:
 # ---------- Example main ----------
 if __name__ == "__main__":
     pln = PathPlanner()
-    pln.load_npz('rgb_xyz_base.npz')
+    pln.debugging = True
+    pln.load_npz('rgb_xyz_aligned_test_test.npz')
     pln.compute_path()

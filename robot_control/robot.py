@@ -1,4 +1,4 @@
-import rtde_control, rtde_receive
+import rtde_control, rtde_receive, rtde_io 
 from math import *
 import numpy as np
 import socket, time
@@ -16,6 +16,7 @@ class UR5Robot:
         self.acc = 0.1 # acceleration (m/s^2)
         self.blend = 0.002 # blending radius for path moves
         self.socket_check()
+        self.home_pos = [-1.57, -1.308, -2.268, -1.136, 1.571, 0.001]
         
         # Extrinsic rotation and translation matrix from depth to color
         # Collected using `rs-enumerate-devices -c`
@@ -28,6 +29,7 @@ class UR5Robot:
             try:
                 self.rtde_c = rtde_control.RTDEControlInterface(self.ip)
                 self.rtde_r = rtde_receive.RTDEReceiveInterface(self.ip)
+                self.rtde_io = rtde_io.RTDEIOInterface(self.ip)
             except:
                 # Incredibly useful, but make sure that X11 forwarding is turned on, otherwise it won't work
                 root = tk.Tk()
@@ -91,7 +93,6 @@ class UR5Robot:
 
     # Function to move along a given path
     def move_path(self,npz):
-
         # Very important to make sure that tcp is set correctly. It's usually redundant on either side, but better safe than collision
         self.set_tcp('base')
         data = np.load('data/' + npz)
@@ -110,6 +111,16 @@ class UR5Robot:
             print(f'Current pose: {tcp}')
         return tcp
     
+    def home(self):
+        current_pos = self.rtde_r.getActualQ()
+
+        if np.allclose(np.asarray(current_pos), np.asarray(self.home_pos), atol=.1):
+            pass
+        else:
+            self.moveJ([-1.462, -2.551, -1.202, 0.623, 1.446, -0.012]) #preprevac
+            self.moveJ([-1.26, -1.898, -2.473, 1.223, 1.255, -0.002]) #scan0
+            self.moveJ(self.home_pos)
+            
     # Executes a MoveJ command to the given position. abs_j dictates if the pose is in joint positions (true) or a cartesian pose (false), and will run IK if needed
     def moveJ(self, pose, abs_j=True):
         if not abs_j:
@@ -127,7 +138,7 @@ class UR5Robot:
     # Initializes shutdown protocol
     def shutdown(self,reset=True):
         print("Shutting down RTDE connection.")
-
+        self.vac_off()
         # Just some extra configuration. Probably unnecessary, but can't hurt
         if reset:
             self.set_tcp('base')
@@ -137,8 +148,12 @@ class UR5Robot:
                 self.rtde_c.disconnect()
             if self.rtde_r.isConnected():
                 self.rtde_r.disconnect()
+            if self.rtde_io.isConnected():
+                self.rtde_io.disconnect()
         except:
             pass
+        finally:
+            quit()
 
     # Helper function to set the TCP and store all the arrays 
     def set_tcp(self, frame='base'):
@@ -165,6 +180,7 @@ class UR5Robot:
         data = np.load('data/' + name)
         rgb = data["color"]
         xyz = data["xyz"]
+        depth = data["depth"]
 
         self.set_tcp('camera')
         tcp = self.get_tcp()
@@ -198,8 +214,14 @@ class UR5Robot:
                 p = p + pos + offset
                 xyz_base[i,j] = p
 
-        np.savez_compressed('data/rgb_xyz_base.npz',color=rgb,xyz=xyz_base)
+        np.savez_compressed('data/rgb_xyz_base.npz',color=rgb,xyz=xyz_base,depth=depth)
         print(f"Saved NPZ with robot base frame coordinates")
+
+    def vac_on(self):
+        self.rtde_io.setConfigurableDigitalOut(0,1)
+
+    def vac_off(self):
+        self.rtde_io.setConfigurableDigitalOut(0,0)
 
 # Throw whatever garbage you want in here for testing 
 if __name__ == "__main__":
@@ -207,8 +229,20 @@ if __name__ == "__main__":
         rob = UR5Robot()
         rob.testing = True
         rob.debugging = True
-        time.sleep(2)
-        rob.convert_to_base('rgb_xyz_aligned.npz')
+        rob.moveJ([-1.462, -2.568, -1.203, 0.64, 1.446, -0.012])
+        rob.moveJ([-1.396, -2.382, -1.161, -1.167, 1.588, 0.029])
+        rob.moveJ([-1.462, -2.568, -1.203, 0.64, 1.446, -0.012])
+        #rob.print_pos()
+        #rob.home()
+        #rob.moveJ([-1.462, -2.551, -1.202, 0.623, 1.446, -0.012])
+        #rob.moveJ([-1.26, -1.898, -2.473, 1.223, 1.255, -0.002])
+        #rob.moveJ(rob.home_pos)
+        #rob.home()
+        #rob.vac_on()
+        #time.sleep(2)
+        #rob.vac_off()
+        #rob.moveJ([-1.57, -1.308, -2.268, -1.136, 1.571, 0.001])
+        #rob.convert_to_base('rgb_xyz_aligned.npz')
         #rob.move_path('path_planning/data/robot_path.npz')
         #test_pos = [[0.0612, -0.700, 0.2304,0,pi,0, 0.05, 0.5, 0.05], [-0.0683, -0.700, 0.2298, 0,pi,0, 0.05, 0.5, 0.05]]
         #rob.rtde_c.moveL(test_pos)
