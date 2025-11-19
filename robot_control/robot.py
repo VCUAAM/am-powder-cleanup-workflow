@@ -17,6 +17,7 @@ class UR5Robot:
         self.blend = 0.002 # blending radius for path moves
         self.socket_check()
         self.home_pos = [-1.57, -1.308, -2.268, -1.136, 1.571, 0.001]
+        self.base_height = False
         
         # Extrinsic rotation and translation matrix from depth to color
         # Collected using `rs-enumerate-devices -c`
@@ -66,26 +67,32 @@ class UR5Robot:
         while not self.rtde_c.isSteady():
             time.sleep(0.1)
 
-    def get_path(self, cart_path, ori,path=[]):
-
-        # Slow down if testing, and also override tcp position in case it's in the wrong spot
-        if self.testing:
-            self.vel = 0.05
+    def get_path(self, xyz_path, ori):
+        try:
+            # Slow down if testing, and also override tcp position in case it's in the wrong spot
+            if self.testing:
+                self.vel = 0.05
             ori = [0, pi, 0]
 
-        for pos in cart_path:
-            # Conditionally offset z if testing to prevent collisions with powder or vents
-            z_val = (pos[2] + 0.055) if self.testing else pos[2]
+            # is it terrible? yeah. does it work? yeah. will I change it? nah
+            def get_point(pos,ori,z=None,vel=None,acc=None,blend=None):
+                return np.round(np.hstack([[pos[0],pos[1],z] if z else [i for i in pos],ori,vel if vel else self.vel,acc if acc else self.acc,blend if blend else self.blend]).astype(float),decimals=4)
+            
+            rob_path = [get_point(i,ori) for i in xyz_path]
+            rob_path.insert(0,get_point(xyz_path[0],ori,z = self.base_height + 0.02))
+            rob_path.append(get_point(xyz_path[-1],ori,z = self.base_height + 0.02))
+            rob_path = np.asarray(rob_path)
 
-            point = [pos[0], pos[1], z_val, ori[0], ori[1], ori[2], self.vel, self.acc, self.blend]
-            point = [round(float(i), 4) for i in point]
-            path.append(point)
+            if self.debugging:
+                # Prints out path in mm for debugging
+                print([(int(1000*i),int(1000*j),int(1000*k)) for i,j,k in rob_path[:,:3]])
 
-        if self.debugging:
-            # Prints out path in mm for debugging
-            print(print([(int(1000*i),int(1000*j),int(1000*k)) for (i,j,k) in cart_path]))
-
-        return path
+            return rob_path
+        
+        except Exception as e:
+            print('sfdsf')
+            print(e)
+            quit()
 
     # Used as a shorthand to extract pose in joint positions to save
     def print_pos(self):
@@ -93,6 +100,7 @@ class UR5Robot:
 
     # Function to move along a given path
     def move_path(self,npz):
+        self.check_testing()
         # Very important to make sure that tcp is set correctly. It's usually redundant on either side, but better safe than collision
         self.set_tcp('base')
         data = np.load('data/' + npz)
@@ -101,8 +109,12 @@ class UR5Robot:
 
         # Will execute each point along the path and release the thread when it's stopped moving
         path = self.get_path(path_raw,ori)
+
+        if not self.testing:
+            self.vac_on()
         self.rtde_c.moveL(path,asynchronous=True)
         self.steady_check()
+        self.vac_off()
 
     # Helper function to quickly get the current TCP position, with terminal output for debugging
     def get_tcp(self):
@@ -111,7 +123,7 @@ class UR5Robot:
             print(f'Current pose: {tcp}')
         return tcp
     
-    def home(self):
+    def moveHome(self):
         current_pos = self.rtde_r.getActualQ()
 
         if np.allclose(np.asarray(current_pos), np.asarray(self.home_pos), atol=.1):
@@ -175,48 +187,51 @@ class UR5Robot:
         self.rtde_c.setTcp(tcp)
         print(f'Set tcp to {frame}')
 
-    # Converts 
+    # Converts provided npz file from camera frame to robot base frame
     def convert_to_base(self,name):
-        data = np.load('data/' + name)
-        rgb = data["color"]
-        xyz = data["xyz"]
-        depth = data["depth"]
+        try:
+            data = np.load('data/' + name)
+            rgb = data["color"]
+            xyz = data["xyz"]
+            depth = data["depth"]
 
-        self.set_tcp('camera')
-        tcp = self.get_tcp()
-        pos = tcp[:3]
-        ori = tcp[3:]
-        rpy = R.from_rotvec(ori)
+            self.set_tcp('camera')
+            tcp = self.get_tcp()
+            pos = tcp[:3]
+            ori = tcp[3:]
+            rpy = R.from_rotvec(ori)
 
-        # Constructing rotation matrix from rpy (roll-pitch-yaw) of current TCP pose
-        # See Modern Robotics by Kevin Lynch and Frank Park for mathematical basis
-        rx,ry,rz = rpy.as_euler('xyz')
-        cX,sX,cY,sY,cZ,sZ = cos(rx),sin(rx),cos(ry),sin(ry),cos(rz),sin(rz)
-        rX = np.array([[1,0,0],[0,cX,-sX],[0,sX,cX]])
-        rY = np.array([[cY,0,sY],[0,1,0],[-sY,0,cY]])
-        rZ = np.array([[cZ,-sZ,0],[sZ,cZ,0],[0,0,1]])
+            # Constructing rotation matrix from rpy (roll-pitch-yaw) of current TCP pose
+            # See Modern Robotics by Kevin Lynch and Frank Park for mathematical basis
+            rx,ry,rz = rpy.as_euler('xyz')
+            cX,sX,cY,sY,cZ,sZ = cos(rx),sin(rx),cos(ry),sin(ry),cos(rz),sin(rz)
+            rX = np.array([[1,0,0],[0,cX,-sX],[0,sX,cX]])
+            rY = np.array([[cY,0,sY],[0,1,0],[-sY,0,cY]])
+            rZ = np.array([[cZ,-sZ,0],[sZ,cZ,0],[0,0,1]])
 
-        r_rot = np.matmul(rZ,np.matmul(rY,rX))
+            r_rot = np.matmul(rZ,np.matmul(rY,rX))
 
-        self.set_tcp('vacuum')
-        offset = np.asarray(self.rtde_c.getTCPOffset()[:3])
+            self.set_tcp('vacuum')
+            offset = np.asarray(self.rtde_c.getTCPOffset()[:3])
 
-        # Adjusting ofset as needed, with extrinsic matrix of camera, safety offset, and a 50mm offset because I CANNOT figure out why the z-val is wrong
-        # My testing showed that it is consistently wrong by 50mm, so this should work, but if you can figure it out be my guest
-        offset = offset + self.d2c_T + [0,0,0.002] + [0,0,0.05]
-        xyz_base = np.zeros_like(xyz)
+            # Adjusting ofset as needed, with extrinsic matrix of camera, safety offset, and a 50mm offset because I CANNOT figure out why the z-val is wrong
+            # My testing showed that it is consistently wrong by 50mm, so this should work, but if you can figure it out be my guest
+            offset = offset + self.d2c_T + [0,0,0.002] + [0,0,0.05]
+            xyz_base = np.zeros_like(xyz)
 
-        # Iterating through entire pointcloud
-        for i in range(xyz.shape[0]):
-            for j in range(xyz.shape[1]):
-                r_tot = np.matmul(self.d2c_R,r_rot)
-                p = np.matmul(r_tot,xyz[i,j])
-                p = p + pos + offset
-                xyz_base[i,j] = p
+            # Iterating through entire pointcloud
+            for i in range(xyz.shape[0]):
+                for j in range(xyz.shape[1]):
+                    r_tot = np.matmul(self.d2c_R,r_rot)
+                    p = np.matmul(r_tot,xyz[i,j])
+                    p = p + pos + offset
+                    xyz_base[i,j] = p
 
-        np.savez_compressed('data/rgb_xyz_base.npz',color=rgb,xyz=xyz_base,depth=depth)
-        print(f"Saved NPZ with robot base frame coordinates")
-
+            np.savez_compressed('data/rgb_xyz_base.npz',color=rgb,xyz=xyz_base,depth=depth)
+            print(f"Saved NPZ with robot base frame coordinates")
+        except Exception as e:
+            print(e)
+ 
     def vac_on(self):
         self.rtde_io.setConfigurableDigitalOut(0,1)
 
@@ -227,29 +242,11 @@ class UR5Robot:
 if __name__ == "__main__":
     try:
         rob = UR5Robot()
-        rob.testing = True
-        rob.debugging = True
-        rob.moveJ([-1.462, -2.568, -1.203, 0.64, 1.446, -0.012])
-        rob.moveJ([-1.396, -2.382, -1.161, -1.167, 1.588, 0.029])
-        rob.moveJ([-1.462, -2.568, -1.203, 0.64, 1.446, -0.012])
-        #rob.print_pos()
-        #rob.home()
-        #rob.moveJ([-1.462, -2.551, -1.202, 0.623, 1.446, -0.012])
-        #rob.moveJ([-1.26, -1.898, -2.473, 1.223, 1.255, -0.002])
-        #rob.moveJ(rob.home_pos)
-        #rob.home()
-        #rob.vac_on()
-        #time.sleep(2)
-        #rob.vac_off()
-        #rob.moveJ([-1.57, -1.308, -2.268, -1.136, 1.571, 0.001])
-        #rob.convert_to_base('rgb_xyz_aligned.npz')
-        #rob.move_path('path_planning/data/robot_path.npz')
-        #test_pos = [[0.0612, -0.700, 0.2304,0,pi,0, 0.05, 0.5, 0.05], [-0.0683, -0.700, 0.2298, 0,pi,0, 0.05, 0.5, 0.05]]
-        #rob.rtde_c.moveL(test_pos)
-        #rob.get_tcp()
-        #rob.moveL(test_pos,abs_j=False)
+        rob.testing = False
+        rob.debugging = False
+        rob.base_height = .178
+        rob.move_path('robot_path.npz')
 
-        #rob.convert_to_base('ml_vision/data/')
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Disconnecting...")
     finally:

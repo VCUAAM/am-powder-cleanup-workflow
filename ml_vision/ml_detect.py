@@ -14,17 +14,26 @@ class ImageProcessor:
         # Data Variables
         self.rgb = None
         self.xyz = None
+        self.depth = None
+        self.mask = None
         self.model = None
         self.model_dir = 'ml_vision/best.pt'
         self.model_name = 'ml_vision/yolov5'
         self.use_prev_mask = False
+        self.base_height = 0.178 # Height of testbed base in m
+        self.find_height = False
 
         # Image Processing Parameters
         self.border_exp = 1 # Amount to increase size of image to ensure complete capture of target 
         self.targ_class = None
         self.offset_px = 15 # Amount of px to constrict image to give clearance around vacuum nozzle
-        self.obstacle_border = 25
 
+        # Obstacle detection parameters
+        self.obstacle_border = 25 # Amount of px to constrict during obstacle detection
+        self.obstacle = False # Checking if there is an obstacle detected in the image
+        self.bottomedOut = False # Checking to see if the height differential exceeds the limits
+        self.obstacleThreshold = 0.003 # height to check to see if there is an obstacle (m)
+        self.bottomedOutThreshold = 0.080
 
         # Obstacle parameters
         self.x_lo = None
@@ -46,10 +55,9 @@ class ImageProcessor:
         compute the physical width (x-direction) and height (y-direction)
         by averaging the left/right and top/bottom edges respectively.
         """
-        #print(xyz[:, 0, 1])
         # Drop invalid points (NaN or 0) if needed
         xyz = np.nan_to_num(xyz)
-        #rint(xyz[:, 0, 0])
+
         # Compute mean of left and right edges (averaging over rows)
         left_mean  = np.nanmean(xyz[:, 0, 0])   # average X of left column
         right_mean = np.nanmean(xyz[:, -1, 0])  # average X of right column
@@ -86,7 +94,7 @@ class ImageProcessor:
         rot = (right + 5000) - (left + 5000) < 0
 
         return rot
-
+    
     def shrink_box(self,rect):
         """
         Shrink (offset < 0) or expand (offset > 0) a rotated rectangle
@@ -107,14 +115,11 @@ class ImageProcessor:
         
         return box
 
-    def load_npz(self,name,mask=False):
+    def load_npz(self,name):
         data = np.load('data/' + name)
         self.rgb = data["color"]
         self.xyz = data["xyz"]
         self.depth = data["depth"]
-
-        if mask:
-            self.mask = data["mask"]
 
     # Runs YOLOv5 model and extracts bounding box
     def extract_model_bbox(self):
@@ -191,9 +196,9 @@ class ImageProcessor:
                                     minLineLength=275, maxLineGap=200)
             
             # Draw Hough lines
-            vis_hough = bounded.copy()
+            hough = bounded.copy()
             for (x1,y1,x2,y2) in lines[:,0]:
-                cv2.line(vis_hough, (x1,y1), (x2,y2), (0,255,0), 2)
+                cv2.line(hough, (x1,y1), (x2,y2), (0,255,0), 2)
             
             # Adding Hough lines to points array
             pts = []
@@ -216,9 +221,9 @@ class ImageProcessor:
             shrink_box = self.shrink_box(rect) + np.array([[self.x_lo, self.y_lo]])
             
             # visualize on full RGB image
-            vis_rect = self.rgb.copy()
-            cv2.drawContours(vis_rect, [box_full], 0, (255, 0, 0), 1)
-            cv2.drawContours(vis_rect, [shrink_box], 0, (0, 0, 255), 1)
+            mask_vis = self.rgb.copy()
+            cv2.drawContours(mask_vis, [box_full], 0, (255, 0, 0), 1)
+            cv2.drawContours(mask_vis, [shrink_box], 0, (0, 0, 255), 1)
 
             # ------ Correct way to build mask (avoids clipped box) ------
             full_mask = np.zeros(self.rgb.shape[:2], dtype=np.uint8)
@@ -229,80 +234,88 @@ class ImageProcessor:
             
         finally:
             try:
-                # Saving images if visualization
+                # Saving images for debugging if needed
                 if self.debugging:
                     i = 0
+                    cv2.imwrite(self.save_path + 'edges.png',edges)
                     i += 1
-                    #cv2.imwrite(self.save_path + 'edges.png',edges)
+                    cv2.imwrite(self.save_path + 'thresh.png',thresh)
                     i += 1
-                    #cv2.imwrite(self.save_path + 'thresh.png',thresh)
+                    cv2.imwrite(self.save_path + 'hough.png',hough)
                     i += 1
-                    #cv2.imwrite(self.save_path + 'hough.png',vis_hough)
-                    i += 1
-                    #cv2.imwrite(self.save_path + 'bbox.png',vis_rect)
+                    cv2.imwrite(self.save_path + 'bbox.png',mask_vis)
                     i += 1
                     print('All image processing debugging images saved')
-                #cv2.imwrite(self.save_path + 'bounded_mask.png',full_mask)
+                cv2.imwrite(self.save_path + 'bounded_mask.png',full_mask)
                 print('Saved mask')
             except UnboundLocalError:
                 match i:
                     case 0:
                         img = 'None of them'
                     case 1:
-                        img = 'clipped.png'
-                    case 2:
                         img = 'edges.png'
-                    case 3:
+                    case 2:
                         img = 'thresh.png'
-                    case 4:
+                    case 3:
                         img = 'hough.png'
-                    case 5:
+                    case 4:
                         img = 'bbox.png'
+                    case 5:
+                        img = 'bounded_mask.png'
+                    case _:
+                        img = 'None of them'
                 print('Something broke, check test images to see why')
                 print(f'Last image that worked was {img}')
                 quit()
             
+            self.find_height = True
+
             return full_mask
 
+    # Finds angle of provided mask, then rotates all image layers such that the mask is flat
     def align_mask_to_img(self,mask):
         try:
             for i in range(10):
+                # Finding amgle of mask 
                 cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
                 c = max(cnts, key=cv2.contourArea)
-                rect = cv2.minAreaRect(c)
-                angle = rect[2]
+                angle = cv2.minAreaRect(c)[2]
 
-                #if rect[1][0] < rect[1][1]:
-                    #angle += 90
                 if angle > 45:
                     angle += -abs(angle)/angle*90
 
-                # --- build rotation matrix about the object centroid ---
+                # Find rotation matrix for given mask
                 M = cv2.getRotationMatrix2D((mask.shape[1]/2,mask.shape[0]/2), angle, 1.0)
 
                 def warp(im, interp=cv2.INTER_LINEAR):
                     return cv2.warpAffine(im, M, (im.shape[1], im.shape[0]),
-                                        flags=interp)#, borderMode=cv2.BORDER_CONSTANT)
+                                        flags=interp)
 
-                # --- rotate all aligned arrays ---
+                # Rotating all arrays based on rotation matrix
                 rgb_rot  = np.dstack([warp(self.rgb[...,c]) for c in range(3)])
-                mask_rot  = warp(mask, interp=cv2.INTER_NEAREST)
-                depth_rot  = warp(self.depth, interp=cv2.INTER_NEAREST)
                 xyz_rot   = np.dstack([warp(self.xyz[...,c],interp=cv2.INTER_NEAREST) for c in range(3)])
-
+                depth_rot  = warp(self.depth, interp=cv2.INTER_NEAREST)
+                mask_rot  = warp(mask, interp=cv2.INTER_NEAREST)
+                
+                # Finding bounding rectangle around mask to determine how much to cut off
                 x_,y_,w_,h_ = cv2.boundingRect(mask_rot)
                 self.offsets = (x_,y_)
-                mask_offset = mask_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
+                
+                # Slicing images around the detected build cylinder, plus the defined offset
                 rgb_offset = rgb_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
                 xyz_offset = xyz_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
                 depth_offset = depth_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
+                mask_offset = mask_rot[y_ + self.offset_px:y_ + h_ - self.offset_px,x_ + self.offset_px:x_ + w_ - self.offset_px]
+
+                # Determining if array is backwards or not and fixing
                 rot = self.real_rect_size(xyz_offset)
                 
                 if rot:
                     xyz_offset = np.fliplr(xyz_offset)
-                    print('Rotated')
-                    self.real_rect_size(xyz_offset,debug=True)
+                    if self.debugging:
+                        print('XYZ flipped horizontally')
                 
+                # Checking to make sure size is correct
                 if abs(mask_offset.shape[0] - mask_offset.shape[1])/max(mask_offset.shape[:2]) > .1:
                     if i == 9:
                         print('Bounding box wrong size')
@@ -315,78 +328,61 @@ class ImageProcessor:
             print(f'Exception: {e}')
 
         finally:
-            #cv2.imwrite(self.save_path + "aligned_mask.png", mask_offset)
             if i > 8:
                 print('Alignment did not succeed within 10 iterations')
                 quit()
-            np.savez_compressed('data/rgb_xyz_aligned_test.npz',
+            cv2.imwrite(self.save_path + "aligned_mask.png", mask_offset)
+            # Checking for obstacle and bottomed threshold
+            if not self.obstacle and np.max(xyz_offset[:,:,2]) - np.min(xyz_offset[:,:,2]) > self.obstacleThreshold:
+                self.obstacle = True
+                print('Obstacle detected')
+            if not self.bottomedOut and np.max(xyz_offset[:,:,2]) - np.min(xyz_offset[:,:,2]) > self.bottomedOutThreshold:
+                self.bottomedOut = True
+                print('Reached bottom of cylinder')
+            
+            # Find height of base if requested
+            if self.find_height:
+                z = xyz_offset.copy()[:,:,2]
+                z[z == 0] = np.nan
+                self.base_height = np.nanmean(z)
+                self.find_height = False
+                print(f'Testbed surface height: {int(self.base_height*10000)/10} mm')
+
+            # Saving aligned mask
+            np.savez_compressed('data/rgb_xyz_aligned.npz',
                             color=rgb_offset,
                             xyz=xyz_offset,
                             depth=depth_offset,
                             mask=mask_offset)
-            print('Aligned NPZ Saved')
-
-    def pointcloud(self):
-        import open3d as o3d
-        origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=100, origin=[0,0,0])
-        coords = np.asarray(list(zip(*np.nonzero(self.xyz))))
-        points = [self.xyz[i,j] for i,j in coords[:,:2]]
-        scalar = 1
-        points_f = [(float(i*scalar),float(j*scalar),float(k*scalar)) for i,j,k in points]
-        cloud = o3d.geometry.PointCloud()
-        cloud.points = o3d.utility.Vector3dVector(points_f)
-        
-        o3d.visualization.draw_geometries([cloud])
+            
+            # Updating image parameters for use in obstacle detection, or signifying end of module
+            if self.obstacle:
+                self.rgb = rgb_offset
+                self.xyz = xyz_offset
+                self.depth = depth_offset
+                self.mask = mask_offset
+            else:
+                print('Aligned NPZ Saved')
     
+    # Ultimately, the best processing for a non-lit obstacle was the xyz map, but a lit map would probably show better results with the rgb
     def find_obstacle(self,img):
         h,w = img.shape
         bounded = img[self.obstacle_border:h - self.obstacle_border,self.obstacle_border:w - self.obstacle_border]
-        #print(bounded)
-        # Thresholding image to make difference between sections more distinct
-        #gray = cv2.cvtColor(bounded, cv2.COLOR_BGR2GRAY)
         depth = bounded.astype(np.float32)
-        print(img)
-        #percentage = .1
-        
-        #z_clipped = np.clip(depth, 0.0, 0.255)
-
-        #z = xyz[..., 2].astype(np.float32)
-
         z_max = np.max(depth)
-        thresh = z_max - 0.002  # 1mm below the highest surface point
+        thresh = z_max - 0.004 # 2mm below the highest surface point
 
+        # Finding obstacle boundaries based on height map
         binary = (depth >= thresh).astype(np.uint8) * 255
 
-        # Scale: 1mm => +1 grayscale intensity
-        #norm = (z_clipped * 1000.0).astype(np.uint8)
-        #MIN_DEPTH = np.percentile(depth, percentage)
-        #MAX_DEPTH = np.percentile(depth, 100 - percentage)
-        #norm = cv2.normalize(z_clipped, None, 0, 255, cv2.NORM_MINMAX).astype(np.uint8)
-        #norme = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX)
-        #norm = np.clip((norm - MIN_DEPTH) * 255.0 / (MAX_DEPTH - MIN_DEPTH), 0, 255).astype(np.uint8)
-        #norm = norme.astype(np.uint8)
-        #bounded = bounded.astype(np.uint8)
-        
-        # Then continue with Canny
-        #blur = cv2.GaussianBlur(norm, (11,11), 0)
-        #edges = cv2.Canny(norm, 40, 150)
-        
-        #kernel = np.ones((8,8), np.uint8)
-        #edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-        
-        #inverted = cv2.bitwise_not(edges)
+        # Smoothing out edges of contours
         kernel = np.ones((8,8), np.uint8)
         edges = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
 
-        # Find contours directly from edge map
+        # Find contours directly from binary
         contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
-        if not contours:
-            raise ValueError("No contours detected")
-
-        # Select the largest contour (likely your cylinder rim)
-        #cnt = max(contours, key=cv2.contourArea)
-
+        # Finding the smallest contour near the center of the image (I don't think this matters for the xyz threshold approach, but it works and I don't want to risk breaking it)
         center = np.array([w/2, h/2])
 
         def contour_center(c):
@@ -396,56 +392,42 @@ class ImageProcessor:
 
         cnt = min(contours, key=lambda c: np.linalg.norm(contour_center(c)-center))
 
-        # Approximate to polygon (Douglas-Peucker)
-        epsilon = 0.02 * cv2.arcLength(cnt, True)  # adjust epsilon if needed
+        # Approximate identified contour to polygon
+        epsilon = 0.02 * cv2.arcLength(cnt, True)  # epislon of 0.02 was working well, tried a few values around it but it made it far worse
         poly = cv2.approxPolyDP(cnt, epsilon, True)
+
+        # Adjusting polygon values to line up with mask, and drawing over mask
         poly_pts = poly.reshape((-1,1,2)).astype(np.int32)
-
         poly_pts = poly_pts + np.array([[self.obstacle_border, self.obstacle_border]])
+        obstacle_mask = self.mask.copy()
+        cv2.fillPoly(obstacle_mask, [poly_pts], 0)
 
-        # visualize on full RGB image
-        vis_rect = self.mask.copy()
-
-        cv2.fillPoly(vis_rect, [poly_pts], 0)
-        #cv2.drawContours(vis_rect, [shrink_box], 0, (0, 0, 255), 1)
-        print(vis_rect)
-        # ------ Correct way to build mask (avoids clipped box) ------
-        #full_mask = np.zeros(self.rgb.shape[:2], dtype=np.uint8)
-        #cv2.fillPoly(full_mask, [box], 255)
-        
-        cv2.imshow('thresh',edges)
-        #cv2.imshow('edges',depth_edges)
-        #cv2.imshow('hough',vis_hough)
-        #cv2.imshow('shadow_removed',shadow_free)
-        cv2.imshow('bbox',vis_rect)
-
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-        np.savez_compressed('data/rgb_xyz_aligned_test_test.npz',
+        # Saving altered mask for path planning algorithm 
+        np.savez_compressed('data/rgb_xyz_aligned.npz',
                             color=self.rgb,
                             xyz=self.xyz,
                             depth=self.depth,
-                            mask=vis_rect)
-
-
+                            mask=obstacle_mask)
+        
+        print('Aligned NPZ Saved')
+    
+    # Pipeline to process an image, and sets appropriate inputs to be handled (use_prev_mask will use the previously identified mask rather than using model to find new one)
     def process_image(self):
         if not self.use_prev_mask:
             mask = self.get_mask()
             self.use_prev_mask = True
         else:
-            mask = cv2.imread('ml_vision/data/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
+            mask = self.mask if self.mask else cv2.imread('ml_vision/data/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
+        
         self.align_mask_to_img(mask)
-        self.load_npz('rgb_xyz_aligned_test.npz',mask=True)
-        self.find_obstacle(self.xyz[...,2])
+        
+        if self.obstacle:
+            self.find_obstacle(self.xyz[...,2])
 
 if __name__ == '__main__':
     img = ImageProcessor()
-    img.debugging = True
+    img.debugging = False
     img.targ_class='build_cylinder'
     img.use_prev_mask = True
     img.load_npz('rgb_xyz_base.npz')
     img.process_image()
-    #mask = img.get_oriented_bbox()
-    #mask = cv2.imread('ml_vision/data/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
-    #img.align_mask(mask)

@@ -38,6 +38,7 @@ class RealSenseCamera:
         self.spatial.set_option(rs.option.filter_magnitude,1)
         self.spatial.set_option(rs.option.filter_smooth_alpha,.5)
         self.spatial.set_option(rs.option.filter_smooth_delta,50)
+        
         # Temporal Filter
         self.temporal = rs.temporal_filter()
         self.temporal_length = 50 # This is how many frames that will prime the filters before taking an actual image. 15 is the minimum I found that worked
@@ -133,6 +134,8 @@ class RealSenseCamera:
                     print(f'Exposure Calibration Successful')
                     print(f'Exposure level set to {exposure} from {self.exposure}')
                     print(f'Brightness: {diff + self.brightness_goal}')
+                self.exposure = exposure
+                self.auto_exposure = False
                 break
             elif abs(diff) > 1:
                 exposure -= int(diff)
@@ -269,10 +272,13 @@ class RealSenseCamera:
             except RuntimeError:
                 self.reset()
                 continue
-            finally:
-                self.pipeline.stop()
-                print('Camera pipeline ended')
     
+    # Helper function to stop the camera pipeline
+    def stop(self):
+        if self.pipeline:
+            self.pipeline.stop()
+            print('Camera pipeline ended')
+
     # Helper function to quickly reset camera in case there were issues
     def reset(self):
         context = rs.context()
