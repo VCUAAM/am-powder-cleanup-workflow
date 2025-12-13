@@ -18,7 +18,7 @@ def save_capture(color_image,xyz_image,save_path,shape):
         num = num.zfill(3)
 
     # 5. Save RGB + XYZ to a compressed .npz
-    np.savez_compressed(save_path + shape + '/xyz/' + shape +'_' + num + '.npz',color=color_image,xyz=xyz_image)
+    #np.savez_compressed(save_path + shape + '/xyz/' + shape +'_' + num + '.npz',color=color_image,xyz=xyz_image)
     print('Saved:' + shape +'_' + num + '.npz')
     cv2.imwrite(save_path + shape + '/rgb/' + shape +'_' + num + '.png',color_image)
     print('Saved:' + shape +'_' + num + '.png')
@@ -34,7 +34,8 @@ def camera_capture():
         config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
         profile = pipeline.start(config)
         color_sensor = profile.get_device().query_sensors()[1]
-        color_sensor.set_option(rs.option.enable_auto_exposure, True)
+        color_sensor.set_option(rs.option.enable_auto_exposure, False)
+        color_sensor.set_option(rs.option.exposure,250)
         color_sensor.set_option(rs.option.enable_auto_white_balance, False)
         color_sensor.set_option(rs.option.white_balance,3000)
         # 2. Create alignment and pointcloud objects
@@ -43,7 +44,7 @@ def camera_capture():
 
         try:
             # Let auto-exposure settle
-            for _ in range(5):
+            for _ in range(10):
                 frames = pipeline.wait_for_frames()
 
             # 3. Capture and align frames
@@ -81,7 +82,7 @@ def camera_capture():
 
 def main():
     save_path = "/home/rosnuc/GitHub/vcu_am_post_processing/ml_vision/training_data/"
-    shape = 'square'
+    shape = 'light'
 
     color_image,xyz_image = camera_capture()
     save_capture(color_image,xyz_image,save_path,shape)

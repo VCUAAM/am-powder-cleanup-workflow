@@ -12,12 +12,13 @@ class UR5Robot:
         self.tcp = None
         self.testing = False
         self.debugging = False
-        self.vel = 0.25 # velocity (m/s)
-        self.acc = 0.1 # acceleration (m/s^2)
+        self.vel = 0.1 # velocity (m/s)
+        self.acc = 0.25 # acceleration (m/s^2)
         self.blend = 0.002 # blending radius for path moves
         self.socket_check()
-        self.home_pos = [-1.57, -1.308, -2.268, -1.136, 1.571, 0.001]
+        self.home_pos = [-1.571, -0.838, -2.055, -1.819, 1.571, 0.0]
         self.base_height = False
+        self.z = None
         
         # Extrinsic rotation and translation matrix from depth to color
         # Collected using `rs-enumerate-devices -c`
@@ -71,18 +72,23 @@ class UR5Robot:
         try:
             # Slow down if testing, and also override tcp position in case it's in the wrong spot
             if self.testing:
-                self.vel = 0.05
+                #self.vel = 0.05
+                pass
+
             ori = [0, pi, 0]
 
             # is it terrible? yeah. does it work? yeah. will I change it? nah
-            def get_point(pos,ori,z=None,vel=None,acc=None,blend=None):
+            def get_point(pos,ori,z=self.z,vel=None,acc=None,blend=None):
                 return np.round(np.hstack([[pos[0],pos[1],z] if z else [i for i in pos],ori,vel if vel else self.vel,acc if acc else self.acc,blend if blend else self.blend]).astype(float),decimals=4)
             
             rob_path = [get_point(i,ori) for i in xyz_path]
             rob_path.insert(0,get_point(xyz_path[0],ori,z = self.base_height + 0.02))
             rob_path.append(get_point(xyz_path[-1],ori,z = self.base_height + 0.02))
             rob_path = np.asarray(rob_path)
-
+            if self.testing:
+                p = np.zeros_like(rob_path[0])
+                p[2] = 0.03
+                rob_path += p
             if self.debugging:
                 # Prints out path in mm for debugging
                 print([(int(1000*i),int(1000*j),int(1000*k)) for i,j,k in rob_path[:,:3]])
@@ -90,7 +96,6 @@ class UR5Robot:
             return rob_path
         
         except Exception as e:
-            print('sfdsf')
             print(e)
             quit()
 
@@ -124,21 +129,29 @@ class UR5Robot:
         return tcp
     
     def moveHome(self):
-        current_pos = self.rtde_r.getActualQ()
+        self.set_tcp('base')
+        current_pos = np.asarray(self.get_tcp())
 
+        def mag(arr1,arr2):
+            return np.sqrt((arr1[0] - arr2[0])**2 + (arr1[1] - arr2[1])**2)
+        
         if np.allclose(np.asarray(current_pos), np.asarray(self.home_pos), atol=.1):
-            pass
-        else:
-            self.moveJ([-1.462, -2.551, -1.202, 0.623, 1.446, -0.012]) #preprevac
-            self.moveJ([-1.26, -1.898, -2.473, 1.223, 1.255, -0.002]) #scan0
-            self.moveJ(self.home_pos)
+            return
+        if mag(current_pos[:2],[-0.11468123625683228, -0.4880530357461711]) < mag(current_pos[:2],[-0.13259367960293592, -0.19587178394715143]):
+            self.moveJ([-1.529, -1.648, -1.976, 0.459, 1.527, 0.02]) #vac approach
+            self.moveJ([-1.362, -0.748, -2.411, -0.009, 1.35, 0.023]) # approach
+            self.moveJ([-1.362, -0.748, -2.411, -0.009, 1.35, 0.023]) #scan0
+        self.moveJ(self.home_pos)
             
     # Executes a MoveJ command to the given position. abs_j dictates if the pose is in joint positions (true) or a cartesian pose (false), and will run IK if needed
     def moveJ(self, pose, abs_j=True):
-        if not abs_j:
-            pose = self.rtde_c.getInverseKinematics(pose)
-        self.rtde_c.moveJ(pose)
-        self.steady_check()
+        try:
+            if not abs_j:
+                pose = self.rtde_c.getInverseKinematics(pose)
+            self.rtde_c.moveJ(pose)
+            self.steady_check()
+        except Exception as e:
+            print('ff',e)
 
     # Executes a MoveL command. abs_j dictates if the pose is in joint positions (true) or a cartesian pose (false), and will run IK if needed
     def moveL(self, pose, abs_j=True):
@@ -244,8 +257,12 @@ if __name__ == "__main__":
         rob = UR5Robot()
         rob.testing = False
         rob.debugging = False
-        rob.base_height = .178
-        rob.move_path('robot_path.npz')
+        rob.base_height = .1801
+        #rob.move_path('robot_path.npz')
+        rob.moveHome()
+        #rob.print_pos()
+        #print(rob.get_tcp())
+        #rob.moveJ([-1.462, -2.551, -1.202, 0.623, 1.446, -0.012])
 
     except KeyboardInterrupt:
         print("KeyboardInterrupt detected. Disconnecting...")

@@ -71,4 +71,4 @@ rotated = cv2.warpAffine(canvas, M, (new_w, new_h), borderValue=(0, 0, 0))
 
 print(f"Square size: {rect_w}x{rect_h}")
 # --- 5. Display and save ---
-cv2.imwrite("ml_vision/test/raw_test_mask.png", rotated)
+cv2.imwrite("ml_vision/data/raw_test_mask.png", rotated)

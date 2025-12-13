@@ -291,5 +291,8 @@ class RealSenseCamera:
 if __name__ == '__main__':
     camera = RealSenseCamera()
     camera.auto_exposure = False
+    camera.exposure = 948
+    camera.auto_wb = False
+    camera.wb = 3000
     camera.debugging = True
     camera.capture()

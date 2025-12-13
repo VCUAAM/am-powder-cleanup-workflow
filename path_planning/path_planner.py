@@ -11,18 +11,21 @@ mpl.use('TkAgg')
 class PathPlanner:
     def __init__(self):
         self.cluster_size = 20
-        self.obstacle = None
+        self.obstacle = False
         self.save_path = "path_planning/data/" # Where to save debugging files 
         self.smooth = True # If true, will smooth polygon offsets
         self.epsilon = .01 # Epsilon ratio for polygon smoothing function
         self.debugging = False
         self.border = 10 #How much to cut off around the edges to compensate for hose size
         self.z_offset = 0.001 # Amount to increase robot path
+        self.avg_z = None
 
     def load_npz(self,name):
         data = np.load('data/' + name)
         self.mask = data['mask']
         self.mask_clip = self.mask.copy()[self.border:-self.border,self.border:-self.border]
+        if (self.mask_clip[self.cluster_size:-self.cluster_size,self.cluster_size:-self.cluster_size] == 0).all():
+            raise ValueError('Imported mask is all zeros')
         self.xyz = data["xyz"]
     
     '''
@@ -69,7 +72,7 @@ class PathPlanner:
             ax.set_ylabel('mm')
         
         # Draw polygon if present, as obstacle if not grid or as box if grid
-        if self.obstacle.any():
+        if self.obstacle is not False:
             if grid:
                 x, y, w_, h_ = cv2.boundingRect(self.obstacle)
                 patch = Rectangle((y - self.border,x - self.border),w_ + 2*self.border,h_ + 2*self.border,linewidth=1,edgecolor='black',facecolor='black')
@@ -189,12 +192,13 @@ class PathPlanner:
         # Mapping grid and grid lookup arrays
         for i in range(clusters_h):
             for j in range(clusters_w):
-                    block = bounded[i * self.cluster_size + self.pad_y // 2:(i + 1) * self.cluster_size + self.pad_y // 2,
-                                    j * self.cluster_size + self.pad_x // 2:(j + 1) * self.cluster_size + self.pad_x // 2]
-                    if np.any(block == 0):
+                    block = bounded[i * self.cluster_size + self.pad_y:(i + 1) * self.cluster_size + self.pad_y,
+                                    j * self.cluster_size + self.pad_x:(j + 1) * self.cluster_size + self.pad_x]
+
+                    if np.count_nonzero(block) < 0.3*block.size:
                         grid[i, j] = 0
-                    self.grid_lookup[i,j] = [(i + 1/2)*self.cluster_size - self.pad_y//2 + self.border,(j + 1/2)*self.cluster_size - self.pad_x//2 + self.border]
-        
+                    self.grid_lookup[i,j] = [max((i + 1/2)*self.cluster_size + self.pad_y - self.border,0),max((j + 1/2)*self.cluster_size + self.pad_x + 1.5*self.border,0)]
+
         return grid
 
     # Complex path planning function, given the shape of the grid and the boundaries of the obstacle
@@ -210,7 +214,7 @@ class PathPlanner:
             else:
                 path.append((w, j))
                 path.append((0, j))
-        
+
         # Checking to see which side the bottom raster finished on and setting appropriate bounds
         if abs(path[-1][0] - 0) > abs(path[-1][0] - w):
             upp = w
@@ -220,7 +224,7 @@ class PathPlanner:
             upp = left
             low = 0
             dir_adj = 0
-        
+       
         # Rasterizing first side
         for j in range(path[-1][1] + 1, top + 1):
             if j % 2 == 0:
@@ -229,13 +233,13 @@ class PathPlanner:
             else:
                 path.append((upp - 1 + dir_adj, j))
                 path.append((low + dir_adj, j))
-
+        
         # Checking to see if current location is already on edge of grid, and moving to edge if not
         if path[-1][0] != 0 and abs(path[-1][0] - w) > abs(path[-1][0] - 0):
             path.append((0, path[-1][1]))
         elif path[-1][0] != w and abs(path[-1][0] - 0) > abs(path[-1][0] - w):
             path.append((w, path[-1][1]))
-
+        
         # Moving to top of grid
         path.append((path[-1][0], h))
 
@@ -304,29 +308,30 @@ class PathPlanner:
         # Choosing path planning regime based on if obstacle is detected or not
         if len(xs) == 0 or len(ys) == 0:
             path = []
-            for i in range(h):
+            for i in range(h - 1):
                 row = [(i, j) for j in (range(w) if i % 2 == 0 else range(w - 1, -1, -1))]
                 path.extend(row)
         else:
             boundaries = [ys.min(), ys.max(), xs.min(), xs.max()]
             path = self.path_planner(h - 1, w - 1, boundaries)
-
+        
         # Cleaning the path to remove unncessary travel points along straight lines
         path_clean = [path[0],path[-1]]
 
         for i in range(1,len(path) - 1):
-            if abs(path[i - 1][0] - path[i][0]) == 0 and abs(path[i][0] - path[i + 1][0]) == 0 and path[i - 1][0] != path[i + 1][0]:
+            if abs(path[i - 1][0] - path[i][0]) == 0 and abs(path[i][0] - path[i + 1][0]) == 0 and path[i - 1] != path[i + 1]:
                 continue
-            elif abs(path[i - 1][1] - path[i][1]) == 0 and abs(path[i][1] - path[i + 1][1]) == 0 and path[i - 1][1] != path[i + 1][1]:
+            elif abs(path[i - 1][1] - path[i][1]) == 0 and abs(path[i][1] - path[i + 1][1]) == 0 and path[i - 1] != path[i + 1]:
                 continue
             else:
                 path_clean.insert(-1,path[i])
 
         # Translating the grid path points to mask (pixel) points, compensating for path planning adjustments
-        path_px = [tuple(self.grid_lookup[i,j]) for [i,j] in path_clean]
+        path_px = [tuple(self.grid_lookup[i,j]) for [j,i] in path_clean]
 
         # Adding offset path around obstacle if one is detected
-        if self.obstacle is not None:
+        if self.obstacle is not False:
+            pass
             offset_polygons = self.generate_offset_polygons()
 
             for layer in reversed(offset_polygons):
@@ -337,8 +342,8 @@ class PathPlanner:
 
         # Visualizing path
         self.visualizer(np.asarray(path_px),grid=False)
-        robot_path = np.asarray([self.xyz[i, j] for (i, j) in path_px])
-        
+        robot_path = np.asarray([self.xyz[i, j] for (i,j) in path_px])
+
         # Changing heights to average height and adding offset
         robot_path[:,2] = self.avg_z + self.z_offset
 
@@ -352,5 +357,6 @@ class PathPlanner:
 if __name__ == "__main__":
     pln = PathPlanner()
     pln.debugging = True
+    pln.avg_z = 0.1801
     pln.load_npz('rgb_xyz_aligned.npz')
     pln.compute_path()

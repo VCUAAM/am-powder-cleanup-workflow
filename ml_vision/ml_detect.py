@@ -20,7 +20,7 @@ class ImageProcessor:
         self.model_dir = 'ml_vision/best.pt'
         self.model_name = 'ml_vision/yolov5'
         self.use_prev_mask = False
-        self.base_height = 0.178 # Height of testbed base in m
+        self.base_height = 0.1801 # Height of testbed base in m
         self.find_height = False
 
         # Image Processing Parameters
@@ -332,11 +332,13 @@ class ImageProcessor:
                 print('Alignment did not succeed within 10 iterations')
                 quit()
             cv2.imwrite(self.save_path + "aligned_mask.png", mask_offset)
-            # Checking for obstacle and bottomed threshold
-            if not self.obstacle and np.max(xyz_offset[:,:,2]) - np.min(xyz_offset[:,:,2]) > self.obstacleThreshold:
+
+            # Checking for obstacle and bottomed threshold on restricted section
+            check_obstacle = xyz_offset[self.obstacle_border:- self.obstacle_border,self.obstacle_border:- self.obstacle_border]
+            if not self.obstacle and np.max(check_obstacle[:,:,2]) - np.min(check_obstacle[:,:,2]) > self.obstacleThreshold:
                 self.obstacle = True
                 print('Obstacle detected')
-            if not self.bottomedOut and np.max(xyz_offset[:,:,2]) - np.min(xyz_offset[:,:,2]) > self.bottomedOutThreshold:
+            if not self.bottomedOut and np.max(check_obstacle[:,:,2]) - np.min(check_obstacle[:,:,2]) > self.bottomedOutThreshold:
                 self.bottomedOut = True
                 print('Reached bottom of cylinder')
             
@@ -398,9 +400,17 @@ class ImageProcessor:
 
         # Adjusting polygon values to line up with mask, and drawing over mask
         poly_pts = poly.reshape((-1,1,2)).astype(np.int32)
-        poly_pts = poly_pts + np.array([[self.obstacle_border, self.obstacle_border]])
+        poly_pts = poly_pts + np.array([[self.obstacle_border//2, self.obstacle_border//2]])
+        _,_,w,h = cv2.boundingRect(poly_pts)
+        hb,wb = bounded.shape
         obstacle_mask = self.mask.copy()
-        cv2.fillPoly(obstacle_mask, [poly_pts], 0)
+
+        # Ensuring that a full obstacle is not mistakenly used
+        if abs(wb - w) < 2 and abs(hb - h) < 2:
+            print('Mistaken no obstacle detected')
+        else:
+            obstacle_mask = self.mask.copy()
+            cv2.fillPoly(obstacle_mask, [poly_pts], 0)
 
         # Saving altered mask for path planning algorithm 
         np.savez_compressed('data/rgb_xyz_aligned.npz',
@@ -408,8 +418,8 @@ class ImageProcessor:
                             xyz=self.xyz,
                             depth=self.depth,
                             mask=obstacle_mask)
-        
-        print('Aligned NPZ Saved')
+        cv2.imwrite(self.save_path + 'obstacle_mask.png',obstacle_mask)
+        print('Aligned NPZ with Obstacle Saved')
     
     # Pipeline to process an image, and sets appropriate inputs to be handled (use_prev_mask will use the previously identified mask rather than using model to find new one)
     def process_image(self):
@@ -417,7 +427,7 @@ class ImageProcessor:
             mask = self.get_mask()
             self.use_prev_mask = True
         else:
-            mask = self.mask if self.mask else cv2.imread('ml_vision/data/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
+            mask = self.mask if self.mask is not None else cv2.imread('ml_vision/data/bounded_mask.png',cv2.IMREAD_GRAYSCALE)
         
         self.align_mask_to_img(mask)
         

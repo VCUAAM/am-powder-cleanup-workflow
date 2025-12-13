@@ -7,8 +7,8 @@ width, height = 500, 500
 canvas = np.zeros((height, width, 3), dtype="uint8")
 
 # --- 1. Randomize square size by ±10% ---
-scale_x = random.uniform(0.9, 1.1)
-scale_y = random.uniform(0.9, 1.1)
+scale_x =1# random.uniform(0.8, 1.5)
+scale_y = 1#random.uniform(0.95, 1.05)
 
 rect_w = int(300 * scale_x)   # Original 400-100 = 300
 rect_h = int(300 * scale_y)
@@ -27,14 +27,8 @@ radius = 15
 mask = np.zeros((height, width), dtype="uint8")
 
 # Draw filled center rectangle
-cv2.rectangle(mask, (x1 + radius, y1), (x2 - radius, y2), 255, -1)
-cv2.rectangle(mask, (x1, y1 + radius), (x2, y2 - radius), 255, -1)
-
-# Draw 4 filled quarter-circles for corners
-cv2.circle(mask, (x1 + radius, y1 + radius), radius, 255, -1)
-cv2.circle(mask, (x2 - radius, y1 + radius), radius, 255, -1)
-cv2.circle(mask, (x1 + radius, y2 - radius), radius, 255, -1)
-cv2.circle(mask, (x2 - radius, y2 - radius), radius, 255, -1)
+cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
+cv2.rectangle(mask, (x1, y1), (x2, y2), 255, -1)
 
 # Apply white color to the mask region
 canvas[mask == 255] = (255, 255, 255)
@@ -67,8 +61,22 @@ new_h = int((h * cos) + (w * sin))
 M[0, 2] += (new_w / 2) - center[0]
 M[1, 2] += (new_h / 2) - center[1]
 
-rotated = cv2.warpAffine(canvas, M, (new_w, new_h), borderValue=(0, 0, 0))
+#rotated = cv2.warpAffine(canvas, M, (new_w, new_h), borderValue=(0, 0, 0))
+print(canvas)
+def trim_zeros_multichannel(img):
+    # img shape: (H, W, C)
+
+    # Row mask: True if ANY value in that row across ANY channel is nonzero
+    row_mask = img.any(axis=(1, 2))
+
+    # Column mask: True if ANY value in that column across ANY channel is nonzero
+    col_mask = img.any(axis=(0, 2))
+
+    # Apply masks
+    trimmed = img[row_mask][:, col_mask, :]
+
+    return trimmed
 
 print(f"Square size: {rect_w}x{rect_h}")
 # --- 5. Display and save ---
-cv2.imwrite("ml_vision/test/test_mask.png", rotated)
+cv2.imwrite("ml_vision/data/test_mask.png", trim_zeros_multichannel(canvas))
