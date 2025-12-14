@@ -17,7 +17,7 @@ class ImageProcessor:
         self.depth = None
         self.mask = None
         self.model = None
-        self.model_dir = 'ml_vision/best.pt'
+        self.model_dir = 'ml_vision/v2_1213.pt'
         self.model_name = 'ml_vision/yolov5'
         self.use_prev_mask = False
         self.base_height = 0.1801 # Height of testbed base in m

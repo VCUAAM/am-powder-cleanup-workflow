@@ -11,11 +11,11 @@ p_vac = [-1.547, -1.656, -1.601, -1.457, 1.586, 0.007] #absolute
 
 
 def testingRoutine():
-    rob.set_tcp('base')
-    rob.moveHome()
-    rob.moveJ(p_approach)
-    rob.moveJ(p_vac_approach)
-    rob.moveJ(p_scan)
+    #rob.set_tcp('base')
+    #rob.moveHome()
+    #rob.moveJ(p_approach)
+    #rob.moveJ(p_vac_approach)
+    #rob.moveJ(p_scan)
 
     while True:
         rob.set_tcp('camera')
@@ -23,6 +23,7 @@ def testingRoutine():
         rob.convert_to_base('rgb_xyz_capture.npz')
         img.load_npz('rgb_xyz_base.npz')
         img.process_image()
+        quit()
         rob.set_tcp('base')
         if img.bottomedOut:
             break
@@ -78,6 +79,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(e)
     finally:
-        rob.moveHome()
+        #rob.moveHome()
         rob.shutdown()
         camera.stop()

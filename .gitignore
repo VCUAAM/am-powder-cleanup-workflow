@@ -5,3 +5,4 @@ ml_vision/training/
 ur5e/
 **/__pycache__
 **/__pycache__/
+.venv/
